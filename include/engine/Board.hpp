@@ -36,7 +36,7 @@ public:
 
     // Goal: read-only twin of checkAndApplyCaptures — same flank pattern, never mutates.
     bool wouldCaptureAnyPair(Move last, Player p) const;
-    
+
     Board();
 
     bool isInBounds(int x, int y) const;
@@ -45,7 +45,6 @@ public:
 
     // returns false (and does nothing) if the move is invalid at this stage
     bool placeStone(Move m, Player p);
-    bool checkWin(Move last, Player p) const;
 
     // returns number of stones captured by this move (0, 2, 4, ... — each direction can independently capture a pair)
     int checkAndApplyCaptures(Move last, Player p);
@@ -69,7 +68,6 @@ private:
     int capturedByBlack = 0;
     int capturedByWhite = 0;
 
-    // Goal: like checkWin(), but returns the actual ordered cells of the winning
     // alignment (not just yes/no) so isLineVulnerable() can inspect adjacent pairs.
     std::vector<Move> findWinningLine(Move last, Player p) const;
 
