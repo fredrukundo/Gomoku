@@ -23,6 +23,12 @@ int main() {
             continue;
         }
 
+        if (board.checkWin(Move{x, y}, current)) {
+            board.print();
+            std::cout << (current == Player::Black ? "Black" : "White") << " wins!\n";
+            break;
+        }
+
         current = (current == Player::Black) ? Player::White : Player::Black;
     }
 
