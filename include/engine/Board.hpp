@@ -13,6 +13,7 @@ public:
 
     // returns false (and does nothing) if the move is invalid at this stage
     bool placeStone(Move m, Player p);
+    bool checkWin(Move last, Player p) const;
 
     void print() const;
 
