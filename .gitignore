@@ -3,6 +3,7 @@ obj/
 Gomoku
 *.o
 *.d
+run_tests
 
 # Editor/IDE
 .vscode/
