@@ -61,15 +61,21 @@ public:
     // this directly for the double-three legality check.
     int countFreeThrees(Move last, Player p) const;
 
+    // Goal: raw, rules-bypassing stone placement for AI search only. Never touches
+    // captures, legality, or win-state tracking — the search tries and undoes
+    // candidate moves far too often to route through the full rules pipeline each
+    // time. Only ever call this from search/AI code, never from the real game loop.
+    void setRaw(int x, int y, Cell c);
+
+    // alignment (not just yes/no) so isLineVulnerable() can inspect adjacent pairs.
+    std::vector<Move> findWinningLine(Move last, Player p) const;
+
     void print() const;
 
 private:
     Cell grid[SIZE][SIZE];
     int capturedByBlack = 0;
     int capturedByWhite = 0;
-
-    // alignment (not just yes/no) so isLineVulnerable() can inspect adjacent pairs.
-    std::vector<Move> findWinningLine(Move last, Player p) const;
 
     // Goal: implements "a 5-alignment only wins if the opponent can't immediately
     // break it by capturing a pair." True if any adjacent same-color pair in the
