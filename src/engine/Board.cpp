@@ -191,6 +191,60 @@ Board::WinResult Board::checkWinConditions(Move last, Player p) {
     return result;
 }
 
+std::string Board::extractLine(Move center, int dx, int dy, int radius, Player p) const {
+    Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
+    Cell opp  = (p == Player::Black) ? Cell::White : Cell::Black;
+    std::string line;
+
+    for (int i = -radius; i <= radius; i++) {
+        int x = center.x + dx * i, y = center.y + dy * i;
+        if (!isInBounds(x, y)) line += '#';
+        else if (grid[y][x] == mine) line += 'X';
+        else if (grid[y][x] == opp) line += 'O';
+        else line += '.';
+    }
+    return line;
+}
+
+namespace {
+    // Goal: checks a length-9 extracted window against the 3 known free-three
+    // shapes, only counting a match if it actually covers the just-placed stone
+    // (at index 4, the window's center) — otherwise it'd be a pre-existing
+    // pattern this move didn't create.
+    bool matchesFreeThreeTemplate(const std::string& window, int centerIdx) {
+        static const std::vector<std::string> templates = {
+            ".XXX.",
+            ".XX.X.",
+            ".X.XX."
+        };
+        for (const auto& t : templates) {
+            int len = (int)t.size();
+            for (int s = 0; s <= (int)window.size() - len; s++) {
+                if (s > centerIdx || s + len - 1 < centerIdx)
+                    continue;
+                bool match = true;
+                for (int i = 0; i < len; i++) {
+                    if (t[i] == 'X' && window[s + i] != 'X') { match = false; break; }
+                    if (t[i] == '.' && window[s + i] != '.') { match = false; break; }
+                }
+                if (match) return true;
+            }
+        }
+        return false;
+    }
+}
+
+int Board::countFreeThrees(Move last, Player p) const {
+    static const int dirs[4][2] = { {1,0}, {0,1}, {1,1}, {1,-1} };
+    int count = 0;
+    for (const auto& d : dirs) {
+        std::string window = extractLine(last, d[0], d[1], 4, p);
+        if (matchesFreeThreeTemplate(window, 4))
+            count++;
+    }
+    return count;
+}
+
 void Board::print() const {
     for (int y = 0; y < SIZE; y++) {
         for (int x = 0; x < SIZE; x++) {
