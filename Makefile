@@ -10,6 +10,10 @@ OBJ_DIR = obj
 
 SRC = $(shell find $(SRC_DIR) -name '*.cpp')
 OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRC))
+
+TEST_SRC = $(shell find src/engine -name '*.cpp') tests/rules_tests.cpp
+TEST_OBJ = $(patsubst %.cpp,$(OBJ_DIR)/test_%.o,$(TEST_SRC))
+
 DEP = $(OBJ:.o=.d)
 
 all: $(NAME)
@@ -21,6 +25,15 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
+test: $(TEST_OBJ)
+	$(CXX) $(TEST_OBJ) -o run_tests
+	./run_tests
+
+$(OBJ_DIR)/test_%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+
 -include $(DEP)
 
 clean:
@@ -31,4 +44,4 @@ fclean: clean
 
 re: fclean all
 
-.PHONY: all clean fclean re
+.PHONY: all clean fclean re test
