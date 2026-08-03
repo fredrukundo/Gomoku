@@ -21,10 +21,6 @@ int main() {
         Move m{x, y};
         Board::MoveEvaluation eval = board.evaluateMove(m, current);
 
-        std::cout << "  [eval] wouldCapture=" << eval.wouldCapture
-                << " freeThrees=" << eval.freeThrees
-                << " legal=" << eval.legal << "\n";
-
         if (!eval.legal) {
             std::cout << "Illegal move";
             if (eval.freeThrees >= 2 && !eval.wouldCapture)
@@ -44,12 +40,6 @@ int main() {
         if (freeThrees > 0)
             std::cout << "Free-three(s) created: " << freeThrees << "\n";
 
-        // TEMPORARY debug — remove once you trust the output, keep while testing:
-        static const int dirs[4][2] = { {1,0}, {0,1}, {1,1}, {1,-1} };
-        for (const auto& d : dirs) {
-            std::cout << "  window(" << d[0] << "," << d[1] << "): "
-                    << board.extractLine(Move{x,y}, d[0], d[1], 4, current) << "\n";
-        }
 
         int captured = board.checkAndApplyCaptures(Move{x, y}, current);
         if (captured > 0)
