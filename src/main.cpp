@@ -20,8 +20,15 @@ int main() {
 
         if (!board.placeStone(Move{x, y}, current)) {
             std::cout << "Illegal move, try again.\n";
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
             continue;
         }
+
+        int captured = board.checkAndApplyCaptures(Move{x, y}, current);
+        if (captured > 0)
+            std::cout << "Black captured: " << board.capturedBy(Player::Black)
+          << " | White captured: " << board.capturedBy(Player::White) << "\n";
 
         if (board.checkWin(Move{x, y}, current)) {
             board.print();
