@@ -19,6 +19,24 @@ public:
     // a fresh alignment win (finalized or deferred), and resolution of any alignment
     // win that was left pending from the opponent's previous move.
     WinResult checkWinConditions(Move last, Player p);
+
+    struct MoveEvaluation {
+    bool legal = true;
+    bool wouldCapture = false;
+    int freeThrees = 0;
+    };
+
+    // Goal: temporarily places the stone to see what it would do (capture? how many
+    // free-threes?), then rolls the placement back. This IS the double-three rule:
+    // illegal only if it creates 2+ free-threes AND would capture nothing.
+    MoveEvaluation evaluateMove(Move m, Player p);
+
+    // Goal: thin yes/no wrapper around evaluateMove.
+    bool isLegal(Move m, Player p);
+
+    // Goal: read-only twin of checkAndApplyCaptures — same flank pattern, never mutates.
+    bool wouldCaptureAnyPair(Move last, Player p) const;
+    
     Board();
 
     bool isInBounds(int x, int y) const;
