@@ -89,32 +89,98 @@ Do not start bonus work until every mandatory requirement is verified working en
 
 ### 3.1 High-Level Layout
 
+Headers and implementation are kept in fully separate trees (`include/` vs `src/`) that mirror each other module-for-module. This keeps includes unambiguous (`-Iinclude` covers everything, always), keeps the Makefile's auto-discovery simple, and avoids ever mixing declarations and definitions in the same place.
+
 ```
 Gomoku/
 ├── Makefile
+├── include/
+│   ├── common/
+│   │   └── Types.hpp             (shared enums/structs: Move, Player, Cell)
+│   ├── engine/
+│   │   ├── Board.hpp
+│   │   ├── Rules.hpp              (legality, captures, win detection)
+│   │   ├── ThreatDetector.hpp     (free-three / double-three)
+│   │   └── GameState.hpp
+│   ├── ai/
+│   │   ├── Minimax.hpp
+│   │   ├── Evaluator.hpp          (heuristic / pattern scoring)
+│   │   ├── MoveOrdering.hpp
+│   │   └── TimeManager.hpp
+│   └── ui/
+│       ├── Renderer.hpp
+│       ├── InputHandler.hpp
+│       └── DebugPanel.hpp
 ├── src/
 │   ├── main.cpp
-│   ├── engine/              <- Person A
-│   │   ├── Board.hpp / .cpp
-│   │   ├── Rules.hpp / .cpp        (legality, captures, win detection)
-│   │   ├── ThreatDetector.hpp/.cpp (free-three / double-three)
-│   │   └── GameState.hpp / .cpp
-│   ├── ai/                  <- Person B
-│   │   ├── Minimax.hpp / .cpp
-│   │   ├── Evaluator.hpp / .cpp    (heuristic / pattern scoring)
-│   │   ├── MoveOrdering.hpp / .cpp
-│   │   └── TimeManager.hpp / .cpp
-│   ├── ui/                  <- Person B
-│   │   ├── Renderer.hpp / .cpp
-│   │   ├── InputHandler.hpp / .cpp
-│   │   └── DebugPanel.hpp / .cpp
-│   └── common/
-│       └── Types.hpp        (shared enums/structs, e.g. Move, Player, Cell)
+│   ├── engine/
+│   │   ├── Board.cpp
+│   │   ├── Rules.cpp
+│   │   ├── ThreatDetector.cpp
+│   │   └── GameState.cpp
+│   ├── ai/
+│   │   ├── Minimax.cpp
+│   │   ├── Evaluator.cpp
+│   │   ├── MoveOrdering.cpp
+│   │   └── TimeManager.cpp
+│   └── ui/
+│       ├── Renderer.cpp
+│       ├── InputHandler.cpp
+│       └── DebugPanel.cpp
+├── obj/                           (generated at build time — gitignored)
 ├── tests/
-│   └── rules_tests.cpp      (unit tests for capture/free-three edge cases)
+│   └── rules_tests.cpp            (unit tests for capture/free-three edge cases)
 └── docs/
-    └── defense_notes.md     (minimax + heuristic explanation, written together)
+    └── defense_notes.md           (minimax + heuristic explanation)
 ```
+
+Add an `obj/` line to `.gitignore` along with the `Gomoku` binary itself — neither should ever be committed.
+
+### 3.1.1 Makefile
+
+Auto-discovers every `.cpp` under `src/`, mirrors the object tree under `obj/`, and uses compiler-generated dependency files (`-MMD -MP`) so that changing a single header only recompiles the `.cpp` files that actually include it — this is what makes "no unnecessary relink" true in practice, not just on the first build.
+
+```makefile
+NAME = Gomoku
+
+CXX = c++
+CXXFLAGS = -Wall -Wextra -Werror -std=c++17 -Iinclude
+CXXFLAGS += $(shell pkg-config --cflags sdl2)
+LDFLAGS = $(shell pkg-config --libs sdl2)
+
+SRC_DIR = src
+OBJ_DIR = obj
+
+SRC = $(shell find $(SRC_DIR) -name '*.cpp')
+OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRC))
+DEP = $(OBJ:.o=.d)
+
+all: $(NAME)
+
+$(NAME): $(OBJ)
+	$(CXX) $(OBJ) -o $(NAME) $(LDFLAGS)
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+-include $(DEP)
+
+clean:
+	rm -rf $(OBJ_DIR)
+
+fclean: clean
+	rm -f $(NAME)
+
+re: fclean all
+
+.PHONY: all clean fclean re
+```
+
+Notes:
+- You never edit the `SRC`/`OBJ` lists by hand — drop a new `.cpp` anywhere under `src/` and the next `make` picks it up automatically.
+- `#include` paths in your `.cpp` files are always relative to `include/`, e.g. `#include "engine/Board.hpp"` — never relative `../` paths.
+- If you later add `SDL2_ttf` (for the timer/debug text), extend both `pkg-config` calls: `` `pkg-config --cflags sdl2 SDL2_ttf` `` / `` `pkg-config --libs sdl2 SDL2_ttf` ``.
 
 ### 3.2 Engine ↔ AI ↔ UI Contract
 
