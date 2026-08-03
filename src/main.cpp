@@ -18,6 +18,21 @@ int main() {
             continue;
         }
 
+        Move m{x, y};
+        Board::MoveEvaluation eval = board.evaluateMove(m, current);
+
+        std::cout << "  [eval] wouldCapture=" << eval.wouldCapture
+                << " freeThrees=" << eval.freeThrees
+                << " legal=" << eval.legal << "\n";
+
+        if (!eval.legal) {
+            std::cout << "Illegal move";
+            if (eval.freeThrees >= 2 && !eval.wouldCapture)
+                std::cout << " — forbidden double-three (no capture to justify it)";
+            std::cout << ", try again.\n";
+            continue;
+        }
+
         if (!board.placeStone(Move{x, y}, current)) {
             std::cout << "Illegal move, try again.\n";
             std::cin.clear();
@@ -48,6 +63,7 @@ int main() {
                     << (win.reason == Board::WinReason::Capture ? "capture" : "alignment") << "!\n";
             break;
         }
+        
 
         current = (current == Player::Black) ? Player::White : Player::Black;
     }
