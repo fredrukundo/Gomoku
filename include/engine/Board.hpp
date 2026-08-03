@@ -1,6 +1,7 @@
 #pragma once
 #include "common/Types.hpp"
 #include <vector>
+#include <string>
 
 class Board {
 public:
@@ -31,6 +32,17 @@ public:
     // returns number of stones captured by this move (0, 2, 4, ... — each direction can independently capture a pair)
     int checkAndApplyCaptures(Move last, Player p);
     int capturedBy(Player p) const;
+
+    // Goal: extract a 1D slice of the board along direction (dx,dy), centered on 'center',
+    // 'radius' cells each side, encoded as a string for pattern matching:
+    // 'X' = this player's stone, 'O' = opponent's stone, '#' = out of bounds (a hard
+    // blocker, same as an opponent stone), '.' = empty.
+    std::string extractLine(Move center, int dx, int dy, int radius, Player p) const;
+
+    // Goal: counts how many distinct free-three alignments pass through 'last' for
+    // player p, across all 4 axes (horizontal, vertical, 2 diagonals). Step 7 uses
+    // this directly for the double-three legality check.
+    int countFreeThrees(Move last, Player p) const;
 
     void print() const;
 
