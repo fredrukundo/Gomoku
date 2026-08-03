@@ -126,22 +126,31 @@ std::vector<Move> Board::findWinningLine(Move last, Player p) const {
 // empty cell on the other side of the pair).
 bool Board::isLineVulnerable(const std::vector<Move>& line, Player attacker) const {
     Player defender = (attacker == Player::Black) ? Player::White : Player::Black;
+    Cell mine = (attacker == Player::Black) ? Cell::Black : Cell::White;
     Cell defenderCell = (defender == Player::Black) ? Cell::Black : Cell::White;
+    static const int dirs4[4][2] = { {1,0}, {0,1}, {1,1}, {1,-1} };
 
-    for (size_t i = 0; i + 1 < line.size(); i++) {
-        int dx = line[i+1].x - line[i].x;
-        int dy = line[i+1].y - line[i].y;
+    // For every stone IN the winning line, check all 4 axis directions for a
+    // same-color neighbor (which may or may not also be part of the line) —
+    // that neighbor pair is what could actually get captured.
+    for (const auto& cell : line) {
+        for (const auto& d : dirs4) {
+            int dx = d[0], dy = d[1];
+            int nx = cell.x + dx, ny = cell.y + dy;
+            if (!isInBounds(nx, ny) || grid[ny][nx] != mine)
+                continue;
 
-        int fx1 = line[i].x - dx,   fy1 = line[i].y - dy;
-        int fx2 = line[i+1].x + dx, fy2 = line[i+1].y + dy;
+            int fx1 = cell.x - dx, fy1 = cell.y - dy;
+            int fx2 = nx + dx,     fy2 = ny + dy;
 
-        bool flank1Defender = isInBounds(fx1, fy1) && grid[fy1][fx1] == defenderCell;
-        bool flank2Defender = isInBounds(fx2, fy2) && grid[fy2][fx2] == defenderCell;
-        bool flank1Empty = isInBounds(fx1, fy1) && grid[fy1][fx1] == Cell::Empty;
-        bool flank2Empty = isInBounds(fx2, fy2) && grid[fy2][fx2] == Cell::Empty;
+            bool flank1Defender = isInBounds(fx1, fy1) && grid[fy1][fx1] == defenderCell;
+            bool flank2Defender = isInBounds(fx2, fy2) && grid[fy2][fx2] == defenderCell;
+            bool flank1Empty = isInBounds(fx1, fy1) && grid[fy1][fx1] == Cell::Empty;
+            bool flank2Empty = isInBounds(fx2, fy2) && grid[fy2][fx2] == Cell::Empty;
 
-        if ((flank1Defender && flank2Empty) || (flank2Defender && flank1Empty))
-            return true;
+            if ((flank1Defender && flank2Empty) || (flank2Defender && flank1Empty))
+                return true;
+        }
     }
     return false;
 }
@@ -243,6 +252,52 @@ int Board::countFreeThrees(Move last, Player p) const {
             count++;
     }
     return count;
+}
+
+bool Board::wouldCaptureAnyPair(Move last, Player p) const {
+    static const int dirs8[8][2] = {
+        {1,0}, {-1,0}, {0,1}, {0,-1},
+        {1,1}, {-1,-1}, {1,-1}, {-1,1}
+    };
+    Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
+    Cell opp  = (p == Player::Black) ? Cell::White : Cell::Black;
+
+    for (const auto& d : dirs8) {
+        int dx = d[0], dy = d[1];
+        int x1 = last.x + dx,   y1 = last.y + dy;
+        int x2 = last.x + 2*dx, y2 = last.y + 2*dy;
+        int x3 = last.x + 3*dx, y3 = last.y + 3*dy;
+        if (isInBounds(x1,y1) && isInBounds(x2,y2) && isInBounds(x3,y3)
+            && grid[y1][x1] == opp && grid[y2][x2] == opp && grid[y3][x3] == mine)
+            return true;
+    }
+    return false;
+}
+
+Board::MoveEvaluation Board::evaluateMove(Move m, Player p) {
+    MoveEvaluation eval;
+
+    if (!isEmpty(m.x, m.y)) {
+        eval.legal = false;
+        return eval;
+    }
+
+    Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
+    grid[m.y][m.x] = mine; // temporary placement
+
+    eval.wouldCapture = wouldCaptureAnyPair(m, p);
+    eval.freeThrees = countFreeThrees(m, p);
+
+    grid[m.y][m.x] = Cell::Empty; // rollback
+
+    if (!eval.wouldCapture && eval.freeThrees >= 2)
+        eval.legal = false;
+
+    return eval;
+}
+
+bool Board::isLegal(Move m, Player p) {
+    return evaluateMove(m, p).legal;
 }
 
 void Board::print() const {
