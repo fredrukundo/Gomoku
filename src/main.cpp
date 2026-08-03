@@ -30,9 +30,11 @@ int main() {
             std::cout << "Black captured: " << board.capturedBy(Player::Black)
           << " | White captured: " << board.capturedBy(Player::White) << "\n";
 
-        if (board.checkWin(Move{x, y}, current)) {
+        Board::WinResult win = board.checkWinConditions(Move{x, y}, current);
+        if (win.won) {
             board.print();
-            std::cout << (current == Player::Black ? "Black" : "White") << " wins!\n";
+            std::cout << (win.winner == Player::Black ? "Black" : "White") << " wins by "
+                    << (win.reason == Board::WinReason::Capture ? "capture" : "alignment") << "!\n";
             break;
         }
 
