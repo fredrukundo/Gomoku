@@ -15,8 +15,14 @@ public:
     bool placeStone(Move m, Player p);
     bool checkWin(Move last, Player p) const;
 
+    // returns number of stones captured by this move (0, 2, 4, ... — each direction can independently capture a pair)
+    int checkAndApplyCaptures(Move last, Player p);
+    int capturedBy(Player p) const;
+
     void print() const;
 
 private:
     Cell grid[SIZE][SIZE];
+    int capturedByBlack = 0;
+    int capturedByWhite = 0;
 };
