@@ -1,0 +1,18 @@
+# Build output
+obj/
+Gomoku
+*.o
+*.d
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local SDL2 build (if you ever build it from source into the repo instead of ~/.local)
+SDL2-*/
