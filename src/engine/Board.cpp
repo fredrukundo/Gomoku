@@ -270,6 +270,11 @@ bool Board::isLegal(Move m, Player p) {
     return evaluateMove(m, p).legal;
 }
 
+void Board::setRaw(int x, int y, Cell c) {
+    if (isInBounds(x, y))
+        grid[y][x] = c;
+}
+
 void Board::print() const {
     for (int y = 0; y < SIZE; y++) {
         for (int x = 0; x < SIZE; x++) {
