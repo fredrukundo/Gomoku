@@ -183,13 +183,131 @@ a partial guess.
 
 ---
 
-## `main.cpp`
+## `ui/Renderer.hpp` / `Renderer.cpp`  *(Step 14)*
+
+### `Renderer()` / `~Renderer()`
+Constructor does nothing (SDL setup happens in `init`, not here, so failure can
+be reported cleanly rather than crashing from a constructor). The destructor
+tears down every SDL resource in reverse order (fonts, then renderer, then
+window, then the TTF/SDL subsystems) — guarantees no resource leak even on an
+early `return` from `main`, relevant to the subject's "never crash / never
+quit unexpectedly" rule, since a slow leak across repeated games could
+eventually cause exactly that.
+
+### `init(fontPath, boldFontPath)`
+Creates the SDL window, renderer, and both fonts (regular + bold, for visual
+hierarchy in the side panel). Returns `false` on any failure instead of
+continuing with a null pointer, so `main.cpp` can exit cleanly with an error
+instead of crashing deeper in the code. Also enables `SDL_BLENDMODE_BLEND` —
+without this, SDL2 ignores alpha entirely, which silently broke the stone
+shadow (see the `drawStones` note below) until caught during testing.
+
+### `clear()` / `present()`
+Thin wrappers around `SDL_RenderClear`/`SDL_RenderPresent`, setting the warm
+wood-tone background color first. Exist mainly so `main.cpp` never touches raw
+SDL calls directly — all rendering goes through `Renderer`'s API.
+
+### `drawBoard()`
+Draws the grid lines, the 9 traditional star points (rows/columns 4, 10, 16 —
+both decorative and a genuine distance-judging aid), and the coordinate labels
+(`A`-`T` skipping `I`, `1`-`19`). Composed from three private helpers
+(`drawGridLines`, `drawStarPoints`, `drawCoordinateLabels`) kept separate for
+readability even though they're always called together.
+
+### `drawText(text, x, y, color, font)`
+Renders one line of text via SDL_ttf: builds a surface, converts it to a
+texture, blits it, then frees both — texture/surface objects aren't reused
+across frames for simplicity, acceptable at this text volume. Fails silently
+(returns without drawing) rather than crashing if the surface can't be built,
+since a missing label must never take down the whole game.
+
+### `drawWrappedText(text, x, y, maxWidth, color, font, lineSpacing)`
+Word-wraps text to fit `maxWidth` before drawing, breaking only on word
+boundaries (never mid-word). Added after testing showed longer status messages
+(e.g. the double-three explanation) overflowing the fixed-width side panel
+with the plain `drawText`.
+
+### `drawFilledCircle(centerX, centerY, radius, color)`
+Hand-rolled filled-circle drawing (horizontal scanline per row), replacing
+`SDL2_gfx` — that library's dev headers weren't available on this system with
+no sudo access, and since only filled circles were ever needed from it,
+writing this directly removed the dependency entirely rather than working
+around the missing headers.
+
+### `drawStones(board, lastMove)`
+Draws every stone on the board: a soft offset shadow, then the stone itself
+(white stones get a thin outline so they don't blend into the light
+background), then a red ring around whichever cell matches `lastMove`. The
+ring's radius is deliberately kept under half a cell width so it never
+visually overlaps a directly-adjacent neighboring stone — an early version
+didn't do this and produced a smudged look on adjacent moves (see the
+shadow/blend-mode fix above for the other half of that same visual bug).
+
+### `drawWinLine(line)`
+Draws a highlighted line from the first to the last cell of a winning
+alignment (`line` comes directly from `Board::findWinningLine`, already
+spatially ordered). A few offset parallel `SDL_RenderDrawLine` calls
+approximate a thicker stroke, since plain SDL2 only draws 1px lines natively.
+
+### `drawSidePanel(currentPlayer, blackCaptured, whiteCaptured, statusMessage, aiInfo, aiThinking)`
+Renders the whole right-hand info panel: whose turn it is (with a
+"(thinking...)" suffix while the AI is searching), capture counts out of 10,
+a persistent "AI last move" section (this is what satisfies the subject's
+mandatory AI-timer-display requirement), a plain-language "How to win"
+reference for beginners, and any current status message. Organized top-to-
+bottom with divider lines between sections for visual structure.
+
+### `drawGameOverOverlay(winnerText)`
+Dims the board (relies on the blend mode enabled in `init`) and draws a
+centered winner banner plus a restart prompt. Text centering is approximate
+(estimated from character count, not measured via `TTF_SizeText`) — good
+enough for a banner, avoids adding a text-measurement dependency just for
+this one case.
+
+---
+
+## `ui/InputHandler.hpp` / `InputHandler.cpp`  *(Step 14c)*
+
+### `pixelToBoardCoord(pixelX, pixelY, outMove)`
+Converts a raw mouse-click pixel position into board coordinates — the exact
+inverse of `Renderer`'s `MARGIN`/`CELL_SIZE` placement math, so a click always
+lands on the same intersection a stone would actually be drawn at. Rounds to
+the *nearest* intersection, then rejects the click entirely if it's too far
+from that intersection (`CLICK_TOLERANCE`) to plausibly have been aimed at
+it — without this, any click vaguely near the board would silently snap to
+whatever line happened to be closest, which feels imprecise on a small 32px
+grid. A static method (no state) since it's a pure coordinate conversion with
+no reason to be an instance.
+
+---
+
+## `main.cpp`  *(Step 14, replaces the earlier console version)*
 
 ### `main()`
-Minimal console harness for testing engine logic before the GUI exists. Alternates
-turns, reads coordinates, validates input without crashing, and routes every move
-through the Board's public API in order: `placeStone` → `checkAndApplyCaptures` →
-`checkWinConditions`. This loop is a temporary stand-in for what the real game loop
-(GUI-driven) will do starting at Step 14 — the sequence of API calls stays the same,
-only the input/output mechanism changes.
+The real game loop. Owns all game state (`board`, `current`, `lastMove`,
+`statusMessage`, `gameOver`, `winLine`, `aiInfo`) and a `resetGame` lambda so
+"start a new game" logic exists in exactly one place rather than being
+duplicated at every possible restart trigger.
 
+Per frame: polls SDL events (quit, and left-click — routed differently
+depending on whether the game has ended, whether it's the human's turn, and
+whether the click lands on a valid board cell), then renders in a fixed
+back-to-front order (board → stones → win line → side panel → game-over
+overlay), then — **after** that frame is presented, not before — runs the AI's
+turn if it's White's move. Presenting the frame first guarantees
+"(thinking...)" is actually visible on screen for at least one frame before
+the blocking `findBestMoveTimed` call runs, instead of the window silently
+freezing with no feedback.
+
+Every move, human or AI, goes through the identical engine sequence:
+`evaluateMove`/`isLegal` → `placeStone` → `checkAndApplyCaptures` →
+`checkWinConditions` → (if won) `findWinningLine` for the highlight — the same
+pipeline the original console version used, just triggered by clicks and AI
+search instead of `std::cin`.
+
+Includes a safety fallback for the AI: since the search's `candidateMoves`
+doesn't enforce the double-three rule, its chosen move is verified with
+`isLegal` before being applied; on the rare chance it isn't, the game falls
+back to scanning for any legal cell rather than ever applying an invalid
+move. This is a stopgap, not a fix to the search itself — teaching the search
+to respect the rule directly remains a known follow-up, not yet done.
