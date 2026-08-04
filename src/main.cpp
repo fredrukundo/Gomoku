@@ -25,14 +25,9 @@ int main(int argc, char* argv[]) {
     bool gameOver = false;
     std::vector<Move> winLine;
 
-    // Goal: fixed roles for this mode — human plays Black and moves first,
-    // AI plays White. A future bonus feature (color choice) could make this
-    // configurable; kept simple and explicit for now.
     const Player humanPlayer = Player::Black;
     const Player aiPlayer = Player::White;
     Minimax aiEngine(1); // depth is overwritten every call by findBestMoveTimed
-    // Real margin under the 500ms hard requirement — the GUI's own event
-    // loop and rendering add overhead on top of the search itself.
     const double AI_TIME_LIMIT_MS = 350.0;
     std::string aiInfo = "White hasn't moved yet";
 
@@ -59,9 +54,6 @@ int main(int argc, char* argv[]) {
                     if (event.button.button == SDL_BUTTON_LEFT)
                         resetGame();
 
-                // Goal: only accept a click as a move when it's genuinely the
-                // human's turn — guards against a click landing during the
-                // brief window before the AI's blocking search actually runs.
                 } else if (event.button.button == SDL_BUTTON_LEFT && current == humanPlayer) {
                     Move clicked;
                     if (InputHandler::pixelToBoardCoord(event.button.x, event.button.y, clicked)) {
@@ -98,9 +90,29 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Goal: recomputed fresh every frame from the live mouse position —
+        // no event needed, since we just want "wherever the mouse currently
+        // is," not a one-time click.
+        int mouseX, mouseY;
+        SDL_GetMouseState(&mouseX, &mouseY);
+        Move hoverMove{-1, -1};
+        bool showHover = false;
+        bool hoverLegal = false;
+
+        if (!gameOver && current == humanPlayer) {
+            if (InputHandler::pixelToBoardCoord(mouseX, mouseY, hoverMove) &&
+                board.isEmpty(hoverMove.x, hoverMove.y)) {
+                showHover = true;
+                hoverLegal = board.isLegal(hoverMove, humanPlayer);
+            }
+        }
+
         renderer.clear();
         renderer.drawBoard();
         renderer.drawStones(board, lastMove);
+
+        if (showHover)
+            renderer.drawHoverPreview(hoverMove, humanPlayer, hoverLegal);
 
         if (gameOver && !winLine.empty())
             renderer.drawWinLine(winLine);
