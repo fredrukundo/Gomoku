@@ -13,6 +13,7 @@ public:
         bool won = false;
         WinReason reason = WinReason::None;
         Player winner = Player::Black;
+        
     };
 
     // Goal: single entry point called after every move. Combines the 10-capture win,
@@ -69,6 +70,13 @@ public:
 
     // alignment (not just yes/no) so isLineVulnerable() can inspect adjacent pairs.
     std::vector<Move> findWinningLine(Move last, Player p) const;
+
+    // Goal: non-allocating twin of findWinningLine, for the search's hot path.
+    // findWinningLine returns a std::vector (heap allocation) but the search
+    // only needs a yes/no per move — at tens of thousands of calls per search,
+    // those allocations are pure waste. findWinningLine is still used by the
+    // GUI, which needs the actual cells to draw the win highlight.
+    bool hasWinningLine(Move last, Player p) const;
 
     void print() const;
 
