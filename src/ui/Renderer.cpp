@@ -3,6 +3,8 @@
 #include <cmath>
 #include <sstream>
 
+static const char* BOARD_COLS = "ABCDEFGHJKLMNOPQRST";
+
 Renderer::Renderer() {}
 
 Renderer::~Renderer() {
@@ -38,8 +40,8 @@ bool Renderer::init(const std::string& fontPath, const std::string& boldFontPath
     }
 
     // Without this SDL ignores alpha entirely and treats every color as fully
-    // opaque — the low-alpha stone shadow and the game-over dim both depend on
-    // real blending.
+    // opaque — the stone shadow, the game-over dim, and the debug overlay all
+    // depend on real blending.
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     bodyFont = TTF_OpenFont(fontPath.c_str(), 15);
@@ -123,10 +125,9 @@ void Renderer::drawWrappedText(const std::string& text, int x, int y, int maxWid
 
 void Renderer::drawCoordinateLabels() {
     SDL_Color color = { 60, 40, 20, 255 };
-    const std::string cols = "ABCDEFGHJKLMNOPQRST";
 
     for (int x = 0; x < Board::SIZE; x++) {
-        std::string label(1, cols[x]);
+        std::string label(1, BOARD_COLS[x]);
         drawText(label, MARGIN + x * CELL_SIZE - 4, MARGIN - 28, color, bodyFont);
     }
     for (int y = 0; y < Board::SIZE; y++) {
@@ -205,12 +206,64 @@ void Renderer::drawSuggestion(Move m) {
     SDL_Color cyan = { 40, 150, 220, 255 };
     SDL_Color boardBg = { 222, 184, 135, 255 };
 
-    // Ring: a cyan disc with the board color punched back out of the middle,
-    // leaving an annulus. The small center dot keeps it reading as a target
-    // rather than an empty circle.
     drawFilledCircle(cx, cy, STONE_RADIUS + 3, cyan);
     drawFilledCircle(cx, cy, STONE_RADIUS, boardBg);
     drawFilledCircle(cx, cy, 3, cyan);
+}
+
+void Renderer::drawCandidateMarkers(const std::vector<ScoredMove>& scores) {
+    int rank = 1;
+    for (const auto& sm : scores) {
+        // Stop at 9 — a two-digit label doesn't stay legible inside a 32px
+        // cell, and the top handful is what actually explains the decision.
+        if (rank > 9) break;
+
+        int cx = MARGIN + sm.move.x * CELL_SIZE;
+        int cy = MARGIN + sm.move.y * CELL_SIZE;
+
+        SDL_Color fill = (rank == 1) ? SDL_Color{40, 150, 80, 210}
+                                      : SDL_Color{170, 130, 50, 180};
+        drawFilledCircle(cx, cy, 11, fill);
+        drawText(std::to_string(rank), cx - 4, cy - 10, SDL_Color{255, 255, 255, 255}, bodyFont);
+        rank++;
+    }
+}
+
+void Renderer::drawDebugOverlay(const std::vector<ScoredMove>& scores, int depth,
+                                 const std::string& forPlayerText) {
+    const int MAX_ROWS = 8;
+    int rows = (int)scores.size();
+    if (rows > MAX_ROWS) rows = MAX_ROWS;
+
+    int boxW = 210;
+    int boxH = 66 + rows * 20;
+    int bx = MARGIN + BOARD_PIXELS - boxW - 6;
+    int by = MARGIN + 6;
+
+    SDL_SetRenderDrawColor(renderer, 25, 25, 25, 215);
+    SDL_Rect box = { bx, by, boxW, boxH };
+    SDL_RenderFillRect(renderer, &box);
+
+    SDL_Color white = { 255, 255, 255, 255 };
+    SDL_Color dim = { 195, 195, 195, 255 };
+    SDL_Color bestColor = { 120, 230, 140, 255 };
+
+    int y = by + 8;
+    drawText("AI reasoning", bx + 10, y, white, headerFont);
+    y += 24;
+    drawText("depth " + std::to_string(depth) + "  -  " + forPlayerText,
+             bx + 10, y, dim, bodyFont);
+    y += 26;
+
+    int rank = 1;
+    for (const auto& sm : scores) {
+        if (rank > MAX_ROWS) break;
+        std::string coord = std::string(1, BOARD_COLS[sm.move.x]) + std::to_string(sm.move.y + 1);
+        std::string line = std::to_string(rank) + ". " + coord + "   " + std::to_string(sm.score);
+        drawText(line, bx + 10, y, (rank == 1) ? bestColor : dim, bodyFont);
+        y += 20;
+        rank++;
+    }
 }
 
 void Renderer::drawWinLine(const std::vector<Move>& line) {
@@ -241,59 +294,61 @@ void Renderer::drawSidePanel(const PanelInfo& info) {
         SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
     };
 
-    int y = 16;
+    int y = 14;
     drawText(info.modeText, panelX + 10, y, accent, headerFont);
-    y += 30;
+    y += 28;
 
     std::string turnText = std::string("Turn: ") +
         (info.currentPlayer == Player::Black ? "Black" : "White");
     if (info.thinking) turnText += " (thinking...)";
     drawText(turnText, panelX + 10, y, turnColor, headerFont);
-    y += 34;
+    y += 30;
 
     hr(y);
-    y += 16;
+    y += 14;
 
     drawText("Captures (10 to win)", panelX + 10, y, dark, headerFont);
-    y += 26;
+    y += 24;
     drawText("Black: " + std::to_string(info.blackCaptured) + " / 10", panelX + 20, y, dark, bodyFont);
-    y += 20;
+    y += 19;
     drawText("White: " + std::to_string(info.whiteCaptured) + " / 10", panelX + 20, y, dark, bodyFont);
-    y += 30;
+    y += 26;
 
     hr(y);
-    y += 16;
+    y += 14;
 
     drawText(info.aiSectionLabel, panelX + 10, y, dark, headerFont);
-    y += 26;
+    y += 24;
     drawWrappedText(info.aiInfo, panelX + 20, y, SIDE_PANEL_WIDTH - 40, dark, bodyFont);
-    y += 50;
+    y += 46;
 
     hr(y);
-    y += 16;
+    y += 14;
 
     drawText("How to win", panelX + 10, y, dark, headerFont);
-    y += 26;
-    drawText("Get 5+ in a row", panelX + 20, y, dark, bodyFont);
-    y += 19;
-    drawText("(any direction)", panelX + 20, y, dark, bodyFont);
     y += 24;
+    drawText("Get 5+ in a row", panelX + 20, y, dark, bodyFont);
+    y += 18;
+    drawText("(any direction)", panelX + 20, y, dark, bodyFont);
+    y += 22;
     drawText("OR capture 10", panelX + 20, y, dark, bodyFont);
-    y += 19;
+    y += 18;
     drawText("opponent stones", panelX + 20, y, dark, bodyFont);
-    y += 30;
+    y += 26;
 
     hr(y);
-    y += 16;
+    y += 14;
 
     drawText("Controls", panelX + 10, y, dark, headerFont);
-    y += 26;
+    y += 24;
     drawText("M - switch mode", panelX + 20, y, dark, bodyFont);
-    y += 19;
+    y += 18;
     drawText("S - suggest a move", panelX + 20, y, dark, bodyFont);
-    y += 19;
+    y += 18;
+    drawText("D - AI reasoning", panelX + 20, y, dark, bodyFont);
+    y += 18;
     drawText("R - restart", panelX + 20, y, dark, bodyFont);
-    y += 28;
+    y += 24;
 
     if (!info.statusMessage.empty()) {
         SDL_Color statusColor = { 180, 30, 30, 255 };

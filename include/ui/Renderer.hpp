@@ -5,10 +5,6 @@
 #include <string>
 #include <vector>
 
-// Goal: bundles everything the side panel displays. Replaces what had grown
-// to a six-argument call about to become eight — a struct keeps the single
-// call site readable and lets fields be added later without touching the
-// signature again.
 struct PanelInfo {
     Player currentPlayer = Player::Black;
     int blackCaptured = 0;
@@ -36,12 +32,18 @@ public:
     void drawWinLine(const std::vector<Move>& line);
     void drawSidePanel(const PanelInfo& info);
     void drawGameOverOverlay(const std::string& winnerText);
-
-    // Goal: marks the cell the engine recommends, using a cyan target ring
-    // deliberately unlike the red last-move ring and the faint hover stone —
-    // three different markers can be on screen at once, so they must be
-    // instantly distinguishable.
     void drawSuggestion(Move m);
+
+    // Goal: numbered markers on the cells the search actually considered,
+    // best-ranked first. Shows WHERE the AI was looking directly on the
+    // board — far more legible at a glance than a list of coordinates, and
+    // the thing a grader can follow while you explain the search.
+    void drawCandidateMarkers(const std::vector<ScoredMove>& scores);
+
+    // Goal: the same candidates as a ranked list with their scores, plus the
+    // depth the numbers came from.
+    void drawDebugOverlay(const std::vector<ScoredMove>& scores, int depth,
+                           const std::string& forPlayerText);
 
     static const int CELL_SIZE = 32;
     static const int MARGIN = 50;

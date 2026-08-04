@@ -8,8 +8,6 @@
 #include <sstream>
 #include <chrono>
 
-// Goal: which players are human. Hotseat is a mandatory subject requirement
-// (two humans on one machine, with a move-suggestion feature).
 enum class GameMode { HumanVsAI, Hotseat };
 
 int main(int argc, char* argv[]) {
@@ -37,15 +35,18 @@ int main(int argc, char* argv[]) {
     const double AI_TIME_LIMIT_MS = 350.0;
     std::string aiInfo = "No moves yet";
 
-    // Goal: a hint, not a move — the player still has to click it. Cleared
-    // whenever a stone is placed so a stale recommendation can't linger and
-    // mislead on the following turn.
     Move suggestedMove{-1, -1};
     bool hasSuggestion = false;
     bool suggestionRequested = false;
 
-    // Goal: single source of truth for "may a click place a stone right now."
-    // In hotseat both sides are human; against the AI only Black is.
+    // Goal: a COPY of the search's root scores, not a reference — the next
+    // search overwrites the engine's internal list, and the debug view has to
+    // keep showing the reasoning behind the move that was actually played.
+    bool showDebug = false;
+    std::vector<ScoredMove> debugScores;
+    int debugDepth = 0;
+    std::string debugPlayerText;
+
     auto isHumanTurn = [&]() {
         return mode == GameMode::Hotseat || current == humanPlayer;
     };
@@ -60,6 +61,9 @@ int main(int argc, char* argv[]) {
         aiInfo = "No moves yet";
         hasSuggestion = false;
         suggestionRequested = false;
+        debugScores.clear();
+        debugDepth = 0;
+        debugPlayerText.clear();
     };
 
     bool running = true;
@@ -73,12 +77,12 @@ int main(int argc, char* argv[]) {
             } else if (event.type == SDL_KEYDOWN) {
                 SDL_Keycode key = event.key.keysym.sym;
                 if (key == SDLK_m) {
-                    // Switching mid-game would leave turn ownership ambiguous,
-                    // so a mode change always starts a fresh board.
                     mode = (mode == GameMode::HumanVsAI) ? GameMode::Hotseat : GameMode::HumanVsAI;
                     resetGame();
                 } else if (key == SDLK_r) {
                     resetGame();
+                } else if (key == SDLK_d) {
+                    showDebug = !showDebug;
                 } else if (key == SDLK_s) {
                     if (!gameOver && isHumanTurn())
                         suggestionRequested = true;
@@ -144,6 +148,11 @@ int main(int argc, char* argv[]) {
         renderer.drawBoard();
         renderer.drawStones(board, lastMove);
 
+        // Markers sit on top of stones (the AI's candidates are empty cells,
+        // but a marker near an occupied one shouldn't be hidden behind it).
+        if (showDebug && !debugScores.empty())
+            renderer.drawCandidateMarkers(debugScores);
+
         if (!gameOver && hasSuggestion)
             renderer.drawSuggestion(suggestedMove);
 
@@ -152,6 +161,9 @@ int main(int argc, char* argv[]) {
 
         if (gameOver && !winLine.empty())
             renderer.drawWinLine(winLine);
+
+        if (showDebug && !debugScores.empty())
+            renderer.drawDebugOverlay(debugScores, debugDepth, debugPlayerText);
 
         PanelInfo panel;
         panel.currentPlayer = current;
@@ -170,18 +182,21 @@ int main(int argc, char* argv[]) {
 
         renderer.present();
 
-        // Both blocking searches run AFTER the frame is presented, so
-        // "(thinking...)" is on screen before the window stops responding.
         if (!gameOver && suggestionRequested) {
             suggestionRequested = false;
 
+            Player asking = current;
             auto t0 = std::chrono::steady_clock::now();
             int depthReached = 0;
-            SearchResult result = aiEngine.findBestMoveTimed(board, current, AI_TIME_LIMIT_MS, depthReached);
+            SearchResult result = aiEngine.findBestMoveTimed(board, asking, AI_TIME_LIMIT_MS, depthReached);
             auto t1 = std::chrono::steady_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-            if (board.isLegal(result.bestMove, current)) {
+            debugScores = aiEngine.getRootScores();
+            debugDepth = depthReached;
+            debugPlayerText = std::string("for ") + (asking == Player::Black ? "Black" : "White");
+
+            if (board.isLegal(result.bestMove, asking)) {
                 suggestedMove = result.bestMove;
                 hasSuggestion = true;
 
@@ -203,6 +218,10 @@ int main(int argc, char* argv[]) {
             SearchResult result = aiEngine.findBestMoveTimed(board, aiPlayer, AI_TIME_LIMIT_MS, depthReached);
             auto searchEnd = std::chrono::steady_clock::now();
             double ms = std::chrono::duration<double, std::milli>(searchEnd - searchStart).count();
+
+            debugScores = aiEngine.getRootScores();
+            debugDepth = depthReached;
+            debugPlayerText = "for White (AI)";
 
             Move aiMove = result.bestMove;
 
