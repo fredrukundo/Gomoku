@@ -184,11 +184,6 @@ int Minimax::scorePlayerPatterns(const Board& board, Player p) const {
     Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
     int total = 0;
 
-    // Walks only the stones that exist (via the sparse set) rather than
-    // scanning all 361 cells — this runs at EVERY leaf node, making it the
-    // most-called expensive function in the search. Requires stonePositions
-    // to be in sync with the board; always true during search, but a
-    // standalone external call must run syncStonePositions(board) first.
     for (const auto& pos : stonePositions) {
         if (board.get(pos.x, pos.y) != mine) continue;
         int x = pos.x, y = pos.y;
@@ -221,11 +216,6 @@ int Minimax::evaluateHeuristic(const Board& board, Player aiPlayer) const {
     int myPatterns = scorePlayerPatterns(board, aiPlayer);
     int theirPatterns = scorePlayerPatterns(board, opponent);
 
-    // Progressive, not linear: 10 captures wins outright, so the 8th stone
-    // captured is far more urgent than the 2nd. Squaring makes the AI defend
-    // its pairs harder as the count climbs, instead of treating every capture
-    // as equally cheap — the flat *50 weighting was why it ignored capture
-    // races entirely.
     int myCaps = totalCapturedBy(board, aiPlayer);
     int theirCaps = totalCapturedBy(board, opponent);
     int captureScore = (myCaps * myCaps - theirCaps * theirCaps) * 15;
@@ -369,9 +359,6 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
         applyMove(board, m, currentCell);
 
         int score;
-        // Both win conditions are now terminal in search. The capture check is
-        // new — without it the AI could walk into losing 10 stones without the
-        // search ever registering that as a loss.
         bool decisive = board.hasWinningLine(m, current) ||
                         (totalCapturedBy(board, current) >= 10);
         if (decisive) {
@@ -416,6 +403,8 @@ SearchResult Minimax::findBestMove(Board& board, Player aiPlayer, const Move* pr
     int alpha = std::numeric_limits<int>::min();
     int beta = std::numeric_limits<int>::max();
 
+    currentRootScores.clear();
+
     auto moves = candidateMoves(board);
     orderMovesByQuickScore(board, moves, aiPlayer);
     if (moves.size() > MAX_CANDIDATES_AT_ROOT)
@@ -447,6 +436,12 @@ SearchResult Minimax::findBestMove(Board& board, Player aiPlayer, const Move* pr
 
         if (aborted) break;
 
+        // Recorded for the debug view. Note these are alpha-beta scores, not
+        // independent evaluations: once alpha rises, later moves may be cut
+        // early and report a bound rather than an exact value. The ordering
+        // is still meaningful, the losers' exact numbers are not.
+        currentRootScores.push_back(ScoredMove{ m, score });
+
         if (score > result.score) {
             result.score = score;
             result.bestMove = m;
@@ -463,6 +458,8 @@ SearchResult Minimax::findBestMoveTimed(Board& board, Player aiPlayer, double ti
                                   std::chrono::duration<double, std::milli>(timeLimitMs));
     SearchResult bestSoFar;
     depthReached = 0;
+    lastRootScores.clear();
+    lastCompletedDepth = 0;
     bool havePrevious = false;
     Move previousBest{};
 
@@ -480,6 +477,13 @@ SearchResult Minimax::findBestMoveTimed(Board& board, Player aiPlayer, double ti
         depthReached = depth;
         previousBest = result.bestMove;
         havePrevious = true;
+
+        // Promote only on a fully completed depth — an aborted depth's
+        // partial score list would misrepresent what the AI actually decided.
+        lastRootScores = currentRootScores;
+        lastCompletedDepth = depth;
+        std::sort(lastRootScores.begin(), lastRootScores.end(),
+                  [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
 
         double elapsedTotal = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - searchStart).count();
