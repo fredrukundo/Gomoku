@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 typedef struct _TTF_Font TTF_Font;
+int TTF_SizeText(TTF_Font *font, const char *text, int *w, int *h);
 
 int TTF_Init(void);
 void TTF_Quit(void);
