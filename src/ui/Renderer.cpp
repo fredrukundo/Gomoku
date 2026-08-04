@@ -288,3 +288,16 @@ void Renderer::drawGameOverOverlay(const std::string& winnerText) {
     int approxPromptWidth = (int)prompt.size() * 9;
     drawText(prompt, centerX - approxPromptWidth / 2, bannerY + 40, subtext, bodyFont);
 }
+
+void Renderer::drawHoverPreview(Move hoverMove, Player p, bool wouldBeLegal) {
+    static const int STONE_RADIUS = CELL_SIZE / 2 - 4;
+    int cx = MARGIN + hoverMove.x * CELL_SIZE;
+    int cy = MARGIN + hoverMove.y * CELL_SIZE;
+
+    SDL_Color base = (p == Player::Black) ? SDL_Color{20, 20, 20, 90} : SDL_Color{245, 245, 245, 90};
+    SDL_Color tint = wouldBeLegal ? SDL_Color{40, 160, 40, 70} : SDL_Color{200, 40, 40, 90};
+
+    drawFilledCircle(cx, cy, STONE_RADIUS, base);
+    drawFilledCircle(cx, cy, STONE_RADIUS + 3, tint); // thin colored ring around the faint stone
+    drawFilledCircle(cx, cy, STONE_RADIUS, base); // redraw base on top so the ring reads as an outline, not a fill
+}
