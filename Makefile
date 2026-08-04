@@ -14,6 +14,9 @@ OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRC))
 TEST_SRC = $(shell find src/engine -name '*.cpp') tests/rules_tests.cpp
 TEST_OBJ = $(patsubst %.cpp,$(OBJ_DIR)/test_%.o,$(TEST_SRC))
 
+AI_TEST_SRC = $(shell find src/engine -name '*.cpp') $(shell find src/ai -name '*.cpp') tests/ai_smoke_test.cpp
+AI_TEST_OBJ = $(patsubst %.cpp,$(OBJ_DIR)/aitest_%.o,$(AI_TEST_SRC))
+
 DEP = $(OBJ:.o=.d)
 
 all: $(NAME)
@@ -33,6 +36,13 @@ $(OBJ_DIR)/test_%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
+ai-test: $(AI_TEST_OBJ)
+	$(CXX) $(AI_TEST_OBJ) -o run_ai_test
+	./run_ai_test
+
+$(OBJ_DIR)/aitest_%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 -include $(DEP)
 
@@ -44,4 +54,4 @@ fclean: clean
 
 re: fclean all
 
-.PHONY: all clean fclean re test
+.PHONY: all clean fclean re test ai-test
