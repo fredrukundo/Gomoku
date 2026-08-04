@@ -1,17 +1,20 @@
 #include "ui/Renderer.hpp"
 #include <iostream>
+#include <cmath>
+#include <sstream>
 
 Renderer::Renderer() {}
 
 Renderer::~Renderer() {
-    if (labelFont) TTF_CloseFont(labelFont);
+    if (headerFont) TTF_CloseFont(headerFont);
+    if (bodyFont) TTF_CloseFont(bodyFont);
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     TTF_Quit();
     SDL_Quit();
 }
 
-bool Renderer::init(const std::string& fontPath) {
+bool Renderer::init(const std::string& fontPath, const std::string& boldFontPath) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
         return false;
@@ -33,10 +36,17 @@ bool Renderer::init(const std::string& fontPath) {
         std::cerr << "Renderer creation failed: " << SDL_GetError() << "\n";
         return false;
     }
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    labelFont = TTF_OpenFont(fontPath.c_str(), 14);
-    if (!labelFont) {
-        std::cerr << "Font load failed: " << SDL_GetError() << "\n";
+    bodyFont = TTF_OpenFont(fontPath.c_str(), 15);
+    if (!bodyFont) {
+        std::cerr << "Body font load failed: " << SDL_GetError() << "\n";
+        return false;
+    }
+
+    headerFont = TTF_OpenFont(boldFontPath.c_str(), 17);
+    if (!headerFont) {
+        std::cerr << "Header font load failed: " << SDL_GetError() << "\n";
         return false;
     }
 
@@ -74,9 +84,9 @@ void Renderer::drawStarPoints() {
     }
 }
 
-void Renderer::drawText(const std::string& text, int x, int y, SDL_Color color) {
-    SDL_Surface* surf = TTF_RenderText_Blended(labelFont, text.c_str(), color);
-    if (!surf) return; // fail quietly — a missing label must never crash the game
+void Renderer::drawText(const std::string& text, int x, int y, SDL_Color color, TTF_Font* font) {
+    SDL_Surface* surf = TTF_RenderText_Blended(font, text.c_str(), color);
+    if (!surf) return;
     SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
     SDL_Rect dst = { x, y, surf->w, surf->h };
     SDL_RenderCopy(renderer, tex, nullptr, &dst);
@@ -86,18 +96,15 @@ void Renderer::drawText(const std::string& text, int x, int y, SDL_Color color) 
 
 void Renderer::drawCoordinateLabels() {
     SDL_Color color = { 60, 40, 20, 255 };
-    // Traditional Go/Gomoku column labels skip 'I' (historically avoids confusion
-    // with the digit 1) — following that convention keeps this recognizable to
-    // anyone who already knows Go, while still being a clean A-S range.
     const std::string cols = "ABCDEFGHJKLMNOPQRST";
 
     for (int x = 0; x < Board::SIZE; x++) {
         std::string label(1, cols[x]);
-        drawText(label, MARGIN + x * CELL_SIZE - 4, MARGIN - 28, color);
+        drawText(label, MARGIN + x * CELL_SIZE - 4, MARGIN - 28, color, bodyFont);
     }
     for (int y = 0; y < Board::SIZE; y++) {
         std::string label = std::to_string(y + 1);
-        drawText(label, MARGIN - 32, MARGIN + y * CELL_SIZE - 7, color);
+        drawText(label, MARGIN - 32, MARGIN + y * CELL_SIZE - 7, color, bodyFont);
     }
 }
 
@@ -109,4 +116,120 @@ void Renderer::drawBoard() {
 
 void Renderer::present() {
     SDL_RenderPresent(renderer);
+}
+
+void Renderer::drawFilledCircle(int centerX, int centerY, int radius, SDL_Color color) {
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    for (int dy = -radius; dy <= radius; dy++) {
+        int halfWidth = (int)std::sqrt((double)(radius * radius - dy * dy));
+        SDL_RenderDrawLine(renderer, centerX - halfWidth, centerY + dy,
+                                       centerX + halfWidth, centerY + dy);
+    }
+}
+
+void Renderer::drawStones(const Board& board, Move lastMove) {
+    static const int STONE_RADIUS = CELL_SIZE / 2 - 5; // was -3; more breathing room between neighbors
+
+    for (int y = 0; y < Board::SIZE; y++) {
+        for (int x = 0; x < Board::SIZE; x++) {
+            Cell c = board.get(x, y);
+            if (c == Cell::Empty) continue;
+
+            int cx = MARGIN + x * CELL_SIZE;
+            int cy = MARGIN + y * CELL_SIZE;
+
+            SDL_Color shadow = { 0, 0, 0, 60 };
+            drawFilledCircle(cx + 2, cy + 2, STONE_RADIUS, shadow);
+
+            if (c == Cell::Black) {
+                drawFilledCircle(cx, cy, STONE_RADIUS, SDL_Color{20, 20, 20, 255});
+            } else {
+                drawFilledCircle(cx, cy, STONE_RADIUS, SDL_Color{80, 80, 80, 255});
+                drawFilledCircle(cx, cy, STONE_RADIUS - 2, SDL_Color{245, 245, 245, 255});
+            }
+
+            if (x == lastMove.x && y == lastMove.y) {
+                // Outer ring radius (STONE_RADIUS + 3) must stay under
+                // CELL_SIZE/2 (16px) so it never reaches into a neighboring
+                // cell's space, even when the last move is directly adjacent
+                // to another stone.
+                SDL_Color highlight = { 220, 30, 30, 255 };
+                drawFilledCircle(cx, cy, STONE_RADIUS + 3, highlight);
+                if (c == Cell::Black)
+                    drawFilledCircle(cx, cy, STONE_RADIUS, SDL_Color{20, 20, 20, 255});
+                else {
+                    drawFilledCircle(cx, cy, STONE_RADIUS, SDL_Color{80, 80, 80, 255});
+                    drawFilledCircle(cx, cy, STONE_RADIUS - 2, SDL_Color{245, 245, 245, 255});
+                }
+            }
+        }
+    }
+}
+void Renderer::drawWrappedText(const std::string& text, int x, int y, int maxWidth,
+                                SDL_Color color, TTF_Font* font, int lineSpacing) {
+    std::istringstream words(text);
+    std::string word, line;
+    int curY = y;
+
+    while (words >> word) {
+        std::string testLine = line.empty() ? word : line + " " + word;
+        int w, h;
+        TTF_SizeText(font, testLine.c_str(), &w, &h);
+
+        if (w > maxWidth && !line.empty()) {
+            drawText(line, x, curY, color, font);
+            curY += lineSpacing;
+            line = word;
+        } else {
+            line = testLine;
+        }
+    }
+    if (!line.empty())
+        drawText(line, x, curY, color, font);
+}
+void Renderer::drawSidePanel(Player currentPlayer, int blackCaptured, int whiteCaptured,
+                              const std::string& statusMessage) {
+    int panelX = MARGIN * 2 + BOARD_PIXELS;
+    SDL_Color dark = { 40, 40, 40, 255 };
+    SDL_Color divider = { 190, 160, 120, 255 };
+    SDL_Color turnColor = (currentPlayer == Player::Black)
+        ? SDL_Color{20, 20, 20, 255} : SDL_Color{100, 100, 100, 255};
+
+    int y = 20;
+    std::string turnText = std::string("Turn: ") +
+        (currentPlayer == Player::Black ? "Black" : "White");
+    drawText(turnText, panelX + 10, y, turnColor, headerFont);
+    y += 40;
+
+    SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
+    y += 20;
+
+    drawText("Captures (10 to win)", panelX + 10, y, dark, headerFont);
+    y += 28;
+    drawText("Black: " + std::to_string(blackCaptured) + " / 10", panelX + 20, y, dark, bodyFont);
+    y += 22;
+    drawText("White: " + std::to_string(whiteCaptured) + " / 10", panelX + 20, y, dark, bodyFont);
+    y += 35;
+
+    SDL_SetRenderDrawColor(renderer, divider.r, divider.g, divider.b, divider.a);
+    SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
+    y += 20;
+
+    drawText("How to win", panelX + 10, y, dark, headerFont);
+    y += 28;
+    drawText("Get 5+ in a row", panelX + 20, y, dark, bodyFont);
+    y += 20;
+    drawText("(any direction)", panelX + 20, y, dark, bodyFont);
+    y += 28;
+    drawText("OR capture 10", panelX + 20, y, dark, bodyFont);
+    y += 20;
+    drawText("opponent stones", panelX + 20, y, dark, bodyFont);
+    y += 20;
+    drawText("(in pairs)", panelX + 20, y, dark, bodyFont);
+    y += 40;
+
+    if (!statusMessage.empty()) {
+        SDL_Color statusColor = { 180, 30, 30, 255 };
+        drawWrappedText(statusMessage, panelX + 10, y, SIDE_PANEL_WIDTH - 30, statusColor, headerFont);
+    }
 }
