@@ -188,7 +188,8 @@ void Renderer::drawWrappedText(const std::string& text, int x, int y, int maxWid
         drawText(line, x, curY, color, font);
 }
 void Renderer::drawSidePanel(Player currentPlayer, int blackCaptured, int whiteCaptured,
-                              const std::string& statusMessage) {
+                              const std::string& statusMessage, const std::string& aiInfo,
+                              bool aiThinking) {
     int panelX = MARGIN * 2 + BOARD_PIXELS;
     SDL_Color dark = { 40, 40, 40, 255 };
     SDL_Color divider = { 190, 160, 120, 255 };
@@ -198,9 +199,11 @@ void Renderer::drawSidePanel(Player currentPlayer, int blackCaptured, int whiteC
     int y = 20;
     std::string turnText = std::string("Turn: ") +
         (currentPlayer == Player::Black ? "Black" : "White");
+    if (aiThinking) turnText += " (thinking...)";
     drawText(turnText, panelX + 10, y, turnColor, headerFont);
     y += 40;
 
+    SDL_SetRenderDrawColor(renderer, divider.r, divider.g, divider.b, divider.a);
     SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
     y += 20;
 
@@ -210,6 +213,15 @@ void Renderer::drawSidePanel(Player currentPlayer, int blackCaptured, int whiteC
     y += 22;
     drawText("White: " + std::to_string(whiteCaptured) + " / 10", panelX + 20, y, dark, bodyFont);
     y += 35;
+
+    SDL_SetRenderDrawColor(renderer, divider.r, divider.g, divider.b, divider.a);
+    SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
+    y += 20;
+
+    drawText("AI last move", panelX + 10, y, dark, headerFont);
+    y += 28;
+    drawWrappedText(aiInfo, panelX + 20, y, SIDE_PANEL_WIDTH - 40, dark, bodyFont);
+    y += 55;
 
     SDL_SetRenderDrawColor(renderer, divider.r, divider.g, divider.b, divider.a);
     SDL_RenderDrawLine(renderer, panelX + 10, y, panelX + SIDE_PANEL_WIDTH - 20, y);
@@ -232,4 +244,47 @@ void Renderer::drawSidePanel(Player currentPlayer, int blackCaptured, int whiteC
         SDL_Color statusColor = { 180, 30, 30, 255 };
         drawWrappedText(statusMessage, panelX + 10, y, SIDE_PANEL_WIDTH - 30, statusColor, headerFont);
     }
+}
+
+void Renderer::drawWinLine(const std::vector<Move>& line) {
+    if (line.size() < 2) return;
+
+    int x1 = MARGIN + line.front().x * CELL_SIZE;
+    int y1 = MARGIN + line.front().y * CELL_SIZE;
+    int x2 = MARGIN + line.back().x * CELL_SIZE;
+    int y2 = MARGIN + line.back().y * CELL_SIZE;
+
+    SDL_SetRenderDrawColor(renderer, 220, 30, 30, 220);
+    // A few offset parallel lines approximate a thicker stroke — plain SDL2
+    // only draws 1px lines natively, and a single thin line is easy to miss
+    // against the stones it's meant to be highlighting.
+    for (int off = -1; off <= 1; off++) {
+        SDL_RenderDrawLine(renderer, x1, y1 + off, x2, y2 + off);
+        SDL_RenderDrawLine(renderer, x1 + off, y1, x2 + off, y2);
+    }
+}
+
+void Renderer::drawGameOverOverlay(const std::string& winnerText) {
+    // Dim the whole board area — relies on the SDL_BLENDMODE_BLEND we already
+    // enabled for the stone shadows, so this semi-transparent black actually
+    // blends instead of covering everything solidly.
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+    SDL_Rect overlay = { 0, 0, MARGIN * 2 + BOARD_PIXELS, MARGIN * 2 + BOARD_PIXELS };
+    SDL_RenderFillRect(renderer, &overlay);
+
+    SDL_Color white = { 255, 255, 255, 255 };
+    SDL_Color subtext = { 230, 230, 230, 255 };
+
+    int centerX = (MARGIN * 2 + BOARD_PIXELS) / 2;
+    int bannerY = (MARGIN * 2 + BOARD_PIXELS) / 2 - 40;
+
+    // drawText positions from the top-left corner, so we roughly center by
+    // estimating text width from character count — not pixel-perfect, but
+    // close enough for a banner and avoids needing TTF_SizeText here too.
+    int approxWidth = (int)winnerText.size() * 11;
+    drawText(winnerText, centerX - approxWidth / 2, bannerY, white, headerFont);
+
+    std::string prompt = "Click anywhere to play again";
+    int approxPromptWidth = (int)prompt.size() * 9;
+    drawText(prompt, centerX - approxPromptWidth / 2, bannerY + 40, subtext, bodyFont);
 }
