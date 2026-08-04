@@ -57,6 +57,13 @@ public:
     // happened.
     void drawGameOverOverlay(const std::string& winnerText);
 
+    // Goal: draws a faint preview stone at 'hoverMove' for 'p', so the player can
+    // see exactly where a click would land before committing. Tinted green if the
+    // move would be legal, red if not — lets a beginner spot an illegal move
+    // (occupied cell, double-three) before clicking, rather than only finding out
+    // via an error message after the fact.
+    void drawHoverPreview(Move hoverMove, Player p, bool wouldBeLegal);
+
     void clear();
     void drawBoard();
     void present();
