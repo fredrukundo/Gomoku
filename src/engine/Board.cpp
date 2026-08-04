@@ -286,3 +286,25 @@ void Board::print() const {
         std::cout << '\n';
     }
 }
+
+bool Board::hasWinningLine(Move last, Player p) const {
+    static const int dirs[4][2] = { {1,0}, {0,1}, {1,1}, {1,-1} };
+    Cell target = (p == Player::Black) ? Cell::Black : Cell::White;
+
+    for (const auto& d : dirs) {
+        int dx = d[0], dy = d[1];
+        int count = 1;
+
+        int x = last.x + dx, y = last.y + dy;
+        while (isInBounds(x, y) && grid[y][x] == target) {
+            count++; x += dx; y += dy;
+        }
+        x = last.x - dx; y = last.y - dy;
+        while (isInBounds(x, y) && grid[y][x] == target) {
+            count++; x -= dx; y -= dy;
+        }
+
+        if (count >= 5) return true;
+    }
+    return false;
+}
