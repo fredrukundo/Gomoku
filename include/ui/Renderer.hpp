@@ -34,7 +34,7 @@ public:
     // language, since a beginner won't know terms like "double-three" without
     // them being spelled out when relevant.
     void drawSidePanel(Player currentPlayer, int blackCaptured, int whiteCaptured,
-                        const std::string& statusMessage);
+                    const std::string& statusMessage, const std::string& aiInfo, bool aiThinking);
     
     // Goal: wraps 'text' to fit within maxWidth pixels, breaking on word
     // boundaries, and draws each resulting line. Needed because status messages
@@ -43,6 +43,19 @@ public:
     // edge, as seen with longer messages like the double-three explanation.
     void drawWrappedText(const std::string& text, int x, int y, int maxWidth,
                         SDL_Color color, TTF_Font* font, int lineSpacing = 20);
+    
+    // Goal: draws a highlighted line connecting the winning stones, so the win is
+    // visually obvious at a glance rather than only stated in text. 'line' comes
+    // directly from Board::findWinningLine — already ordered spatially, so we can
+    // just draw a line from its first cell to its last.
+    void drawWinLine(const std::vector<Move>& line);
+
+    // Goal: dims the board and draws a centered banner announcing the winner and
+    // how they won, plus a prompt to restart — makes "the game has ended" visually
+    // unmistakable instead of relying on a small side-panel message someone could
+    // miss, especially important for a beginner who might not be sure what just
+    // happened.
+    void drawGameOverOverlay(const std::string& winnerText);
 
     void clear();
     void drawBoard();
