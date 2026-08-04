@@ -9,7 +9,7 @@ int main() {
     board.setRaw(6, 5, Cell::Black);
     board.setRaw(7, 5, Cell::Black);
 
-    for (int depth : {2, 3}) {
+    for (int depth : {2, 3, 4, 5}) {
         Minimax ai(depth);
         auto start = std::chrono::steady_clock::now();
         SearchResult result = ai.findBestMove(board, Player::White);
