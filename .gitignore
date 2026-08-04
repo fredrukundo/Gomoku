@@ -4,6 +4,7 @@ Gomoku
 *.o
 *.d
 run_tests
+run_ai_test
 
 # Editor/IDE
 .vscode/
