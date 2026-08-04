@@ -1,33 +1,146 @@
 #include "ai/Minimax.hpp"
 #include <limits>
 #include <algorithm>
+#include <random>
+
+namespace {
+    inline int colorIndex(Cell c) { return (c == Cell::Black) ? 0 : 1; }
+}
 
 Minimax::Minimax(int maxDepth) : maxDepth(maxDepth) {
-    // Goal: safe, far-future default so a direct findBestMove() call (bypassing
-    // findBestMoveTimed, as earlier smoke tests do) never mistakes a
-    // default-constructed (epoch) deadline for "time's already up."
     deadline = std::chrono::steady_clock::now() + std::chrono::hours(24);
     stonePositions.reserve(400);
+    undoStack.reserve(64);
     seenStamp.assign(Board::SIZE * Board::SIZE, 0);
+    for (int i = 0; i < Board::SIZE * Board::SIZE; i++)
+        posIndex[i] = -1;
+    initZobrist();
+    transpositionTable.reserve(1 << 16);
+}
+
+void Minimax::initZobrist() {
+    std::mt19937_64 rng(0xC0FFEEULL);
+    for (int x = 0; x < Board::SIZE; x++)
+        for (int y = 0; y < Board::SIZE; y++)
+            for (int pi = 0; pi < 2; pi++)
+                zobristTable[x][y][pi] = rng();
+    for (int p = 0; p < 2; p++)
+        for (int n = 0; n <= 10; n++)
+            zobristCaptures[p][n] = rng();
+}
+
+uint64_t Minimax::captureHashComponent() const {
+    int b = std::min(searchCapturedByBlack, 10);
+    int w = std::min(searchCapturedByWhite, 10);
+    return zobristCaptures[0][b] ^ zobristCaptures[1][w];
+}
+
+void Minimax::addStone(Move m) {
+    posIndex[m.y * Board::SIZE + m.x] = (int)stonePositions.size();
+    stonePositions.push_back(m);
+}
+
+void Minimax::removeStone(Move m) {
+    int slot = m.y * Board::SIZE + m.x;
+    int idx = posIndex[slot];
+    if (idx < 0) return;
+    Move last = stonePositions.back();
+    stonePositions[idx] = last;
+    posIndex[last.y * Board::SIZE + last.x] = idx;
+    stonePositions.pop_back();
+    posIndex[slot] = -1;
 }
 
 void Minimax::syncStonePositions(const Board& board) {
     stonePositions.clear();
-    for (int y = 0; y < Board::SIZE; y++)
-        for (int x = 0; x < Board::SIZE; x++)
-            if (board.get(x, y) != Cell::Empty)
-                stonePositions.push_back({x, y});
+    undoStack.clear();
+    for (int i = 0; i < Board::SIZE * Board::SIZE; i++)
+        posIndex[i] = -1;
+    searchCapturedByBlack = 0;
+    searchCapturedByWhite = 0;
+    currentHash = 0;
+
+    for (int y = 0; y < Board::SIZE; y++) {
+        for (int x = 0; x < Board::SIZE; x++) {
+            Cell c = board.get(x, y);
+            if (c != Cell::Empty) {
+                addStone({x, y});
+                currentHash ^= zobristTable[x][y][colorIndex(c)];
+            }
+        }
+    }
+    currentHash ^= captureHashComponent();
+}
+
+int Minimax::totalCapturedBy(const Board& board, Player p) const {
+    return board.capturedBy(p) +
+           ((p == Player::Black) ? searchCapturedByBlack : searchCapturedByWhite);
 }
 
 void Minimax::applyMove(Board& board, Move m, Cell c) {
+    static const int dirs8[8][2] = {
+        {1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {-1,-1}, {1,-1}, {-1,1}
+    };
+    Cell opp = (c == Cell::Black) ? Cell::White : Cell::Black;
+
+    currentHash ^= captureHashComponent();
+
     board.setRaw(m.x, m.y, c);
-    stonePositions.push_back(m);
+    addStone(m);
+    currentHash ^= zobristTable[m.x][m.y][colorIndex(c)];
+
+    MoveUndo u;
+    u.placedColor = c;
+    u.capturedColor = opp;
+    u.capturedCount = 0;
+
+    for (const auto& d : dirs8) {
+        int dx = d[0], dy = d[1];
+        int x1 = m.x + dx,     y1 = m.y + dy;
+        int x2 = m.x + 2 * dx, y2 = m.y + 2 * dy;
+        int x3 = m.x + 3 * dx, y3 = m.y + 3 * dy;
+
+        if (board.isInBounds(x1, y1) && board.isInBounds(x2, y2) && board.isInBounds(x3, y3)
+            && board.get(x1, y1) == opp && board.get(x2, y2) == opp && board.get(x3, y3) == c) {
+            Move pair[2] = { {x1, y1}, {x2, y2} };
+            for (const auto& cell : pair) {
+                board.setRaw(cell.x, cell.y, Cell::Empty);
+                removeStone(cell);
+                currentHash ^= zobristTable[cell.x][cell.y][colorIndex(opp)];
+                u.captured[u.capturedCount++] = cell;
+            }
+        }
+    }
+
+    if (c == Cell::Black) searchCapturedByBlack += u.capturedCount;
+    else searchCapturedByWhite += u.capturedCount;
+
+    currentHash ^= captureHashComponent();
+    undoStack.push_back(u);
 }
 
 void Minimax::undoMove(Board& board, Move m) {
+    if (undoStack.empty()) return;
+    MoveUndo u = undoStack.back();
+    undoStack.pop_back();
+
+    currentHash ^= captureHashComponent();
+
+    for (int i = 0; i < u.capturedCount; i++) {
+        Move cell = u.captured[i];
+        board.setRaw(cell.x, cell.y, u.capturedColor);
+        addStone(cell);
+        currentHash ^= zobristTable[cell.x][cell.y][colorIndex(u.capturedColor)];
+    }
+
+    if (u.placedColor == Cell::Black) searchCapturedByBlack -= u.capturedCount;
+    else searchCapturedByWhite -= u.capturedCount;
+
+    currentHash ^= zobristTable[m.x][m.y][colorIndex(u.placedColor)];
     board.setRaw(m.x, m.y, Cell::Empty);
-    if (!stonePositions.empty())
-        stonePositions.pop_back();
+    removeStone(m);
+
+    currentHash ^= captureHashComponent();
 }
 
 std::vector<Move> Minimax::candidateMoves(const Board& board, int radius) {
@@ -71,28 +184,32 @@ int Minimax::scorePlayerPatterns(const Board& board, Player p) const {
     Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
     int total = 0;
 
-    for (int y = 0; y < Board::SIZE; y++) {
-        for (int x = 0; x < Board::SIZE; x++) {
-            if (board.get(x, y) != mine) continue;
+    // Walks only the stones that exist (via the sparse set) rather than
+    // scanning all 361 cells — this runs at EVERY leaf node, making it the
+    // most-called expensive function in the search. Requires stonePositions
+    // to be in sync with the board; always true during search, but a
+    // standalone external call must run syncStonePositions(board) first.
+    for (const auto& pos : stonePositions) {
+        if (board.get(pos.x, pos.y) != mine) continue;
+        int x = pos.x, y = pos.y;
 
-            for (const auto& d : dirs) {
-                int dx = d[0], dy = d[1];
-                int px = x - dx, py = y - dy;
-                if (board.isInBounds(px, py) && board.get(px, py) == mine)
-                    continue;
+        for (const auto& d : dirs) {
+            int dx = d[0], dy = d[1];
+            int px = x - dx, py = y - dy;
+            if (board.isInBounds(px, py) && board.get(px, py) == mine)
+                continue;
 
-                int len = 0;
-                int fx = x, fy = y;
-                while (board.isInBounds(fx, fy) && board.get(fx, fy) == mine) {
-                    len++;
-                    fx += dx; fy += dy;
-                }
-
-                bool openStart = board.isInBounds(px, py) && board.get(px, py) == Cell::Empty;
-                bool openEnd = board.isInBounds(fx, fy) && board.get(fx, fy) == Cell::Empty;
-
-                total += patternWeight(len, openStart, openEnd);
+            int len = 0;
+            int fx = x, fy = y;
+            while (board.isInBounds(fx, fy) && board.get(fx, fy) == mine) {
+                len++;
+                fx += dx; fy += dy;
             }
+
+            bool openStart = board.isInBounds(px, py) && board.get(px, py) == Cell::Empty;
+            bool openEnd = board.isInBounds(fx, fy) && board.get(fx, fy) == Cell::Empty;
+
+            total += patternWeight(len, openStart, openEnd);
         }
     }
     return total;
@@ -100,9 +217,19 @@ int Minimax::scorePlayerPatterns(const Board& board, Player p) const {
 
 int Minimax::evaluateHeuristic(const Board& board, Player aiPlayer) const {
     Player opponent = (aiPlayer == Player::Black) ? Player::White : Player::Black;
+
     int myPatterns = scorePlayerPatterns(board, aiPlayer);
     int theirPatterns = scorePlayerPatterns(board, opponent);
-    int captureScore = (board.capturedBy(aiPlayer) - board.capturedBy(opponent)) * 50;
+
+    // Progressive, not linear: 10 captures wins outright, so the 8th stone
+    // captured is far more urgent than the 2nd. Squaring makes the AI defend
+    // its pairs harder as the count climbs, instead of treating every capture
+    // as equally cheap — the flat *50 weighting was why it ignored capture
+    // races entirely.
+    int myCaps = totalCapturedBy(board, aiPlayer);
+    int theirCaps = totalCapturedBy(board, opponent);
+    int captureScore = (myCaps * myCaps - theirCaps * theirCaps) * 15;
+
     return (myPatterns - theirPatterns) + captureScore;
 }
 
@@ -158,8 +285,9 @@ void Minimax::orderMovesByQuickScore(Board& board, std::vector<Move>& moves, Pla
     for (const auto& m : moves)
         scored.push_back({quickLocalScore(board, m, mover), m});
 
-    std::sort(scored.begin(), scored.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
+    size_t keepCount = std::min(scored.size(), MAX_CANDIDATES_AT_ROOT);
+    std::partial_sort(scored.begin(), scored.begin() + keepCount, scored.end(),
+                       [](const auto& a, const auto& b) { return a.first > b.first; });
 
     for (size_t i = 0; i < moves.size(); i++)
         moves[i] = scored[i].second;
@@ -179,8 +307,35 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
     if (checkTimeUp())
         return 0;
 
-    if (depth == 0)
-        return evaluateHeuristic(board, aiPlayer);
+    uint64_t hashKey = currentHash;
+    int alphaOrig = alpha;
+
+    auto ttIt = transpositionTable.find(hashKey);
+    bool usableHit = (ttIt != transpositionTable.end() && ttIt->second.depth >= depth);
+
+    if (usableHit) {
+        ttHits++;
+        const TTEntry& entry = ttIt->second;
+        if (entry.flag == TTFlag::Exact) {
+            return entry.score;
+        } else if (entry.flag == TTFlag::LowerBound) {
+            alpha = std::max(alpha, entry.score);
+        } else if (entry.flag == TTFlag::UpperBound) {
+            beta = std::min(beta, entry.score);
+        }
+        if (alpha >= beta) {
+            return entry.score;
+        }
+    } else {
+        ttMisses++;
+    }
+
+    if (depth == 0) {
+        int score = evaluateHeuristic(board, aiPlayer);
+        transpositionTable[hashKey] = TTEntry{ depth, score, TTFlag::Exact, Move{-1, -1} };
+        ttStores++;
+        return score;
+    }
 
     Player opponent = (aiPlayer == Player::Black) ? Player::White : Player::Black;
     Player current = maximizing ? aiPlayer : opponent;
@@ -188,6 +343,17 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
 
     auto moves = candidateMoves(board);
     orderMovesByQuickScore(board, moves, current);
+
+    if (ttIt != transpositionTable.end()) {
+        Move ttMove = ttIt->second.bestMove;
+        for (size_t i = 0; i < moves.size(); i++) {
+            if (moves[i].x == ttMove.x && moves[i].y == ttMove.y) {
+                std::swap(moves[0], moves[i]);
+                break;
+            }
+        }
+    }
+
     if (moves.size() > MAX_CANDIDATES_PER_NODE)
         moves.resize(MAX_CANDIDATES_PER_NODE);
 
@@ -195,6 +361,7 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
         return 0;
 
     int best = maximizing ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
+    Move bestMoveHere{-1, -1};
 
     for (const auto& m : moves) {
         if (aborted) break;
@@ -202,8 +369,12 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
         applyMove(board, m, currentCell);
 
         int score;
-        auto line = board.findWinningLine(m, current);
-        if (!line.empty()) {
+        // Both win conditions are now terminal in search. The capture check is
+        // new — without it the AI could walk into losing 10 stones without the
+        // search ever registering that as a loss.
+        bool decisive = board.hasWinningLine(m, current) ||
+                        (totalCapturedBy(board, current) >= 10);
+        if (decisive) {
             score = maximizing ? (100000 + depth) : -(100000 + depth);
         } else {
             score = minimax(board, depth - 1, !maximizing, aiPlayer, alpha, beta);
@@ -213,11 +384,26 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
 
         if (aborted) break;
 
-        if (maximizing) { best = std::max(best, score); alpha = std::max(alpha, best); }
-        else { best = std::min(best, score); beta = std::min(beta, best); }
+        if (maximizing) {
+            if (score > best) { best = score; bestMoveHere = m; }
+            alpha = std::max(alpha, best);
+        } else {
+            if (score < best) { best = score; bestMoveHere = m; }
+            beta = std::min(beta, best);
+        }
 
         if (alpha >= beta) break;
     }
+
+    if (!aborted) {
+        TTFlag flag;
+        if (best <= alphaOrig) flag = TTFlag::UpperBound;
+        else if (best >= beta) flag = TTFlag::LowerBound;
+        else flag = TTFlag::Exact;
+        transpositionTable[hashKey] = TTEntry{ depth, best, flag, bestMoveHere };
+        ttStores++;
+    }
+
     return best;
 }
 
@@ -247,7 +433,16 @@ SearchResult Minimax::findBestMove(Board& board, Player aiPlayer, const Move* pr
         if (aborted) break;
 
         applyMove(board, m, myCell);
-        int score = minimax(board, maxDepth - 1, false, aiPlayer, alpha, beta);
+
+        int score;
+        bool decisive = board.hasWinningLine(m, aiPlayer) ||
+                        (totalCapturedBy(board, aiPlayer) >= 10);
+        if (decisive) {
+            score = 100000 + maxDepth;
+        } else {
+            score = minimax(board, maxDepth - 1, false, aiPlayer, alpha, beta);
+        }
+
         undoMove(board, m);
 
         if (aborted) break;
