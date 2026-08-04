@@ -193,30 +193,3 @@ through the Board's public API in order: `placeStone` → `checkAndApplyCaptures
 (GUI-driven) will do starting at Step 14 — the sequence of API calls stays the same,
 only the input/output mechanism changes.
 
-
-
-#include "engine/Board.hpp"
-#include "ai/Minimax.hpp"
-#include <iostream>
-#include <chrono>
-
-int main() {
-    Board board;
-board.setRaw(5, 5, Cell::Black);
-board.setRaw(6, 5, Cell::Black);
-board.setRaw(7, 5, Cell::Black);
-
-Minimax ai(1);
-int depthReached = 0;
-
-auto start = std::chrono::steady_clock::now();
-SearchResult result = ai.findBestMoveTimed(board, Player::White, 400.0, depthReached);
-auto end = std::chrono::steady_clock::now();
-double ms = std::chrono::duration<double, std::milli>(end - start).count();
-
-std::cout << "Move: (" << result.bestMove.x << "," << result.bestMove.y << ")\n";
-std::cout << "Score: " << result.score << "\n";
-std::cout << "Depth reached: " << depthReached << "\n";
-std::cout << "Total time: " << ms << " ms\n";
-    return 0;
-}
