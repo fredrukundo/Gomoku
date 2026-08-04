@@ -22,7 +22,7 @@ private:
     // in this branch — that's what makes the algorithm alternate between picking
     // the highest-scoring move (our turn) and the lowest-scoring move (opponent's
     // turn, assumed optimal against us).
-    int minimax(Board& board, int depth, bool maximizing, Player aiPlayer);
+    int minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta);
 
     // Goal: placeholder scoring for this skeleton step only — counts
     // (aiPlayer's stones - opponent's stones). Replaced by the real pattern-based
