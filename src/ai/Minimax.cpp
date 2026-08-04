@@ -105,7 +105,7 @@ int Minimax::evaluateStub(Board& board, Player aiPlayer) const {
     return mine - theirs;
 }
 
-int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer) {
+int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta) {
     if (depth == 0)
         return evaluateHeuristic(board, aiPlayer);
 
@@ -119,19 +119,27 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer) 
         board.setRaw(m.x, m.y, currentCell);
 
         int score;
-        auto line = board.findWinningLine(m, current); // side-effect-free terminal check
+        auto line = board.findWinningLine(m, current);
         if (!line.empty()) {
-            // Big score, nudged by remaining depth so a faster forced win scores
-            // higher than a slower one — matters once search gets deeper.
             score = maximizing ? (100000 + depth) : -(100000 + depth);
         } else {
-            score = minimax(board, depth - 1, !maximizing, aiPlayer);
+            score = minimax(board, depth - 1, !maximizing, aiPlayer, alpha, beta);
         }
 
-        board.setRaw(m.x, m.y, Cell::Empty); // undo — this is why setRaw exists
+        board.setRaw(m.x, m.y, Cell::Empty);
 
-        if (maximizing) best = std::max(best, score);
-        else best = std::min(best, score);
+        if (maximizing) {
+            best = std::max(best, score);
+            alpha = std::max(alpha, best);
+        } else {
+            best = std::min(best, score);
+            beta = std::min(beta, best);
+        }
+
+        // The cut: once alpha meets or exceeds beta, this branch can no longer
+        // change the final decision at a shallower level — stop exploring it.
+        if (alpha >= beta)
+            break;
     }
 
     return best;
@@ -141,16 +149,19 @@ SearchResult Minimax::findBestMove(Board& board, Player aiPlayer) {
     SearchResult result;
     result.score = std::numeric_limits<int>::min();
     Cell myCell = (aiPlayer == Player::Black) ? Cell::Black : Cell::White;
+    int alpha = std::numeric_limits<int>::min();
+    int beta = std::numeric_limits<int>::max();
 
     for (const auto& m : candidateMoves(board)) {
         board.setRaw(m.x, m.y, myCell);
-        int score = minimax(board, maxDepth - 1, false, aiPlayer); // false: next turn is the opponent's
+        int score = minimax(board, maxDepth - 1, false, aiPlayer, alpha, beta);
         board.setRaw(m.x, m.y, Cell::Empty);
 
         if (score > result.score) {
             result.score = score;
             result.bestMove = m;
         }
+        alpha = std::max(alpha, result.score);
     }
 
     return result;
