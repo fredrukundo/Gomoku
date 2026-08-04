@@ -8,6 +8,10 @@
 #include <sstream>
 #include <chrono>
 
+// Goal: which players are human. Hotseat is a mandatory subject requirement
+// (two humans on one machine, with a move-suggestion feature).
+enum class GameMode { HumanVsAI, Hotseat };
+
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
@@ -25,11 +29,26 @@ int main(int argc, char* argv[]) {
     bool gameOver = false;
     std::vector<Move> winLine;
 
+    GameMode mode = GameMode::HumanVsAI;
     const Player humanPlayer = Player::Black;
     const Player aiPlayer = Player::White;
-    Minimax aiEngine(1); // depth is overwritten every call by findBestMoveTimed
+
+    Minimax aiEngine(1);
     const double AI_TIME_LIMIT_MS = 350.0;
-    std::string aiInfo = "White hasn't moved yet";
+    std::string aiInfo = "No moves yet";
+
+    // Goal: a hint, not a move — the player still has to click it. Cleared
+    // whenever a stone is placed so a stale recommendation can't linger and
+    // mislead on the following turn.
+    Move suggestedMove{-1, -1};
+    bool hasSuggestion = false;
+    bool suggestionRequested = false;
+
+    // Goal: single source of truth for "may a click place a stone right now."
+    // In hotseat both sides are human; against the AI only Black is.
+    auto isHumanTurn = [&]() {
+        return mode == GameMode::Hotseat || current == humanPlayer;
+    };
 
     auto resetGame = [&]() {
         board = Board();
@@ -38,7 +57,9 @@ int main(int argc, char* argv[]) {
         statusMessage.clear();
         gameOver = false;
         winLine.clear();
-        aiInfo = "White hasn't moved yet";
+        aiInfo = "No moves yet";
+        hasSuggestion = false;
+        suggestionRequested = false;
     };
 
     bool running = true;
@@ -49,12 +70,26 @@ int main(int argc, char* argv[]) {
             if (event.type == SDL_QUIT) {
                 running = false;
 
+            } else if (event.type == SDL_KEYDOWN) {
+                SDL_Keycode key = event.key.keysym.sym;
+                if (key == SDLK_m) {
+                    // Switching mid-game would leave turn ownership ambiguous,
+                    // so a mode change always starts a fresh board.
+                    mode = (mode == GameMode::HumanVsAI) ? GameMode::Hotseat : GameMode::HumanVsAI;
+                    resetGame();
+                } else if (key == SDLK_r) {
+                    resetGame();
+                } else if (key == SDLK_s) {
+                    if (!gameOver && isHumanTurn())
+                        suggestionRequested = true;
+                }
+
             } else if (event.type == SDL_MOUSEBUTTONDOWN) {
                 if (gameOver) {
                     if (event.button.button == SDL_BUTTON_LEFT)
                         resetGame();
 
-                } else if (event.button.button == SDL_BUTTON_LEFT && current == humanPlayer) {
+                } else if (event.button.button == SDL_BUTTON_LEFT && isHumanTurn()) {
                     Move clicked;
                     if (InputHandler::pixelToBoardCoord(event.button.x, event.button.y, clicked)) {
 
@@ -67,6 +102,7 @@ int main(int argc, char* argv[]) {
                         } else {
                             board.placeStone(clicked, current);
                             lastMove = clicked;
+                            hasSuggestion = false;
 
                             int captured = board.checkAndApplyCaptures(clicked, current);
                             statusMessage = (captured > 0)
@@ -82,7 +118,7 @@ int main(int argc, char* argv[]) {
                                     winLine = board.findWinningLine(clicked, win.winner);
                                 }
                             } else {
-                                current = aiPlayer;
+                                current = (current == Player::Black) ? Player::White : Player::Black;
                             }
                         }
                     }
@@ -90,20 +126,17 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Goal: recomputed fresh every frame from the live mouse position —
-        // no event needed, since we just want "wherever the mouse currently
-        // is," not a one-time click.
         int mouseX, mouseY;
         SDL_GetMouseState(&mouseX, &mouseY);
         Move hoverMove{-1, -1};
         bool showHover = false;
         bool hoverLegal = false;
 
-        if (!gameOver && current == humanPlayer) {
+        if (!gameOver && isHumanTurn()) {
             if (InputHandler::pixelToBoardCoord(mouseX, mouseY, hoverMove) &&
                 board.isEmpty(hoverMove.x, hoverMove.y)) {
                 showHover = true;
-                hoverLegal = board.isLegal(hoverMove, humanPlayer);
+                hoverLegal = board.isLegal(hoverMove, current);
             }
         }
 
@@ -111,27 +144,60 @@ int main(int argc, char* argv[]) {
         renderer.drawBoard();
         renderer.drawStones(board, lastMove);
 
+        if (!gameOver && hasSuggestion)
+            renderer.drawSuggestion(suggestedMove);
+
         if (showHover)
-            renderer.drawHoverPreview(hoverMove, humanPlayer, hoverLegal);
+            renderer.drawHoverPreview(hoverMove, current, hoverLegal);
 
         if (gameOver && !winLine.empty())
             renderer.drawWinLine(winLine);
 
-        renderer.drawSidePanel(current, board.capturedBy(Player::Black),
-                                board.capturedBy(Player::White), statusMessage,
-                                aiInfo, /*aiThinking=*/(!gameOver && current == aiPlayer));
+        PanelInfo panel;
+        panel.currentPlayer = current;
+        panel.blackCaptured = board.capturedBy(Player::Black);
+        panel.whiteCaptured = board.capturedBy(Player::White);
+        panel.statusMessage = statusMessage;
+        panel.aiInfo = aiInfo;
+        panel.aiSectionLabel = (mode == GameMode::Hotseat) ? "Last suggestion" : "AI last move";
+        panel.modeText = (mode == GameMode::Hotseat) ? "Hotseat: 2 players" : "Human vs AI";
+        panel.thinking = !gameOver &&
+                          ((mode == GameMode::HumanVsAI && current == aiPlayer) || suggestionRequested);
+        renderer.drawSidePanel(panel);
 
-        if (gameOver) {
+        if (gameOver)
             renderer.drawGameOverOverlay(statusMessage);
-        }
 
         renderer.present();
 
-        // Goal: the AI's turn is handled HERE, after the frame above has
-        // already been presented — guarantees "(thinking...)" is actually
-        // visible on screen for at least one frame before the blocking
-        // search below runs, instead of the window silently freezing.
-        if (!gameOver && current == aiPlayer) {
+        // Both blocking searches run AFTER the frame is presented, so
+        // "(thinking...)" is on screen before the window stops responding.
+        if (!gameOver && suggestionRequested) {
+            suggestionRequested = false;
+
+            auto t0 = std::chrono::steady_clock::now();
+            int depthReached = 0;
+            SearchResult result = aiEngine.findBestMoveTimed(board, current, AI_TIME_LIMIT_MS, depthReached);
+            auto t1 = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+            if (board.isLegal(result.bestMove, current)) {
+                suggestedMove = result.bestMove;
+                hasSuggestion = true;
+
+                static const char* COLS = "ABCDEFGHJKLMNOPQRST";
+                std::ostringstream oss;
+                oss << COLS[result.bestMove.x] << (result.bestMove.y + 1)
+                    << " - depth " << depthReached << ", " << (int)ms << " ms";
+                aiInfo = oss.str();
+                statusMessage = "";
+            } else {
+                hasSuggestion = false;
+                statusMessage = "No suggestion available";
+            }
+        }
+
+        if (!gameOver && mode == GameMode::HumanVsAI && current == aiPlayer) {
             auto searchStart = std::chrono::steady_clock::now();
             int depthReached = 0;
             SearchResult result = aiEngine.findBestMoveTimed(board, aiPlayer, AI_TIME_LIMIT_MS, depthReached);
@@ -140,10 +206,6 @@ int main(int argc, char* argv[]) {
 
             Move aiMove = result.bestMove;
 
-            // Safety net: the search doesn't enforce the double-three rule
-            // when generating candidates, so in rare cases its chosen move
-            // could be illegal. Never apply an illegal move — fall back to
-            // scanning for any legal cell instead.
             if (!board.isLegal(aiMove, aiPlayer)) {
                 bool found = false;
                 for (int y = 0; y < Board::SIZE && !found; y++) {
@@ -159,6 +221,7 @@ int main(int argc, char* argv[]) {
 
             board.placeStone(aiMove, aiPlayer);
             lastMove = aiMove;
+            hasSuggestion = false;
 
             int captured = board.checkAndApplyCaptures(aiMove, aiPlayer);
 
