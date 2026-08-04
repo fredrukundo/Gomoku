@@ -1,54 +1,70 @@
 #pragma once
 #include "engine/Board.hpp"
 #include <vector>
+#include <chrono>
+#include <limits>
 
+// Goal: default-initialized so a SearchResult can never carry garbage
+// coordinates/score if returned before a real result is ever assigned (e.g. an
+// extremely tight time budget that aborts before depth 1 completes).
 struct SearchResult {
-    Move bestMove;
-    int score;
+    Move bestMove{0, 0};
+    int score = std::numeric_limits<int>::min();
 };
 
 class Minimax {
 public:
     explicit Minimax(int maxDepth);
 
-    // Goal: entry point — searches from the current board and returns the best
-    // move found for 'aiPlayer', plus its score.
-    SearchResult findBestMove(Board& board, Player aiPlayer);
+    SearchResult findBestMove(Board& board, Player aiPlayer, const Move* preferredFirst = nullptr);
+    SearchResult findBestMoveTimed(Board& board, Player aiPlayer, double timeLimitMs, int& depthReached);
+    bool checkTimeUp();
 
 private:
     int maxDepth;
+    static const size_t MAX_CANDIDATES_PER_NODE = 12; // deeper nodes: narrow, cheap
+    static const size_t MAX_CANDIDATES_AT_ROOT = 20;   // root: a bit wider, cost is amortized once
 
-    // Goal: the recursive search. 'maximizing' is true when it's aiPlayer's turn
-    // in this branch — that's what makes the algorithm alternate between picking
-    // the highest-scoring move (our turn) and the lowest-scoring move (opponent's
-    // turn, assumed optimal against us).
     int minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta);
 
-    // Goal: placeholder scoring for this skeleton step only — counts
-    // (aiPlayer's stones - opponent's stones). Replaced by the real pattern-based
-    // heuristic in Step 11.
     int evaluateStub(Board& board, Player aiPlayer) const;
-
-    // Goal: instead of every empty cell, only return empty cells within 'radius' of
-    // an existing stone — this is what makes depth 10 even conceivable, since it
-    // collapses the branching factor from ~359 down to a small, localized set. Falls
-    // back to the center cell on a fully empty board (radius has nothing to anchor to).
-    std::vector<Move> candidateMoves(const Board& board, int radius = 2) const;
-
-    // Goal: assigns a danger score to one run of stones based on its length and how
-    // many ends are open (0, 1, or 2). This table encodes Gomoku threat theory: an
-    // open three or better is dangerous because it can become unstoppable next move.
+    int evaluateHeuristic(const Board& board, Player aiPlayer) const;
     int patternWeight(int length, bool openStart, bool openEnd) const;
-
-    // Goal: sums patternWeight() over every run belonging to 'p' anywhere on the
-    // board, across all 4 axes. Each run is counted exactly once by only starting a
-    // scan from cells that are the true beginning of a run (previous cell along the
-    // axis isn't the same player).
     int scorePlayerPatterns(const Board& board, Player p) const;
 
-    // Goal: the real heuristic — replaces evaluateStub. Combines pattern-based
-    // scoring (mine minus opponent's) with a weighted capture-count difference,
-    // since captures are an independent win condition worth real weight, not just
-    // a side effect of stone count.
-    int evaluateHeuristic(const Board& board, Player aiPlayer) const;
+    // Goal: a live, incrementally-maintained list of every stone on the board
+    // (both colors). Replaces rescanning all 361 cells for occupied ones at
+    // every search node — that scan now only happens once per depth iteration.
+    std::vector<Move> stonePositions;
+
+    // Goal: rebuilds stonePositions from the real board. Called once per
+    // findBestMove() call (once per depth iteration), never per node.
+    void syncStonePositions(const Board& board);
+
+    // Goal: places a stone AND records it in stonePositions together, so the
+    // two can never drift apart. All AI search placement goes through this —
+    // never call board.setRaw directly elsewhere in this class.
+    void applyMove(Board& board, Move m, Cell c);
+
+    // Goal: exact inverse of applyMove. Relies on strict LIFO usage (apply,
+    // recurse, undo — never interleaved), which the search already guarantees.
+    void undoMove(Board& board, Move m);
+
+    // Goal: generation-stamped dedup array, replacing a fresh
+    // std::vector<bool> allocated on every candidateMoves() call. Bumping
+    // currentGeneration invalidates all previous stamps in O(1).
+    std::vector<int> seenStamp;
+    int currentGeneration = 0;
+
+    // Goal: empty cells within 'radius' of any stone in stonePositions,
+    // deduplicated via seenStamp. Falls back to the center cell if empty.
+    std::vector<Move> candidateMoves(const Board& board, int radius = 2);
+
+    void orderMovesByQuickScore(Board& board, std::vector<Move>& moves, Player mover);
+    int quickLocalScore(const Board& board, Move m, Player mover) const;
+    int localRunScore(const Board& board, Move m, Player p) const;
+
+    std::chrono::steady_clock::time_point deadline;
+    bool aborted = false;
+    int nodesSinceCheck = 0;
 };
