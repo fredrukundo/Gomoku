@@ -1,61 +1,38 @@
-#include "engine/Board.hpp"
-#include <iostream>
-#include <limits>
+#include "ui/Renderer.hpp"
+#include <SDL2/SDL.h>
 
-int main() {
-    Board board;
-    Player current = Player::Black;
+// Goal: entry point for the GUI. SDL2 expects main() with the standard
+// (argc, argv) signature on Linux — SDL.h can rename main -> SDL_main
+// internally depending on build config, and that rename only matches
+// cleanly against this signature. A zero-argument main() risks a link error
+// or unpredictable startup behavior depending on how SDL was built.
+int main(int argc, char* argv[]) {
+    (void)argc; // unused — required by SDL's entry point convention, not by us
+    (void)argv;
 
-    while (true) {
-        board.print();
-        std::cout << (current == Player::Black ? "Black" : "White") << " to move (x y): ";
+    Renderer renderer;
+    if (!renderer.init("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
+        return 1; // init() already printed the specific error — never crash silently
+    }
 
-        int x, y;
-        if (!(std::cin >> x >> y)) {
-            std::cout << "Invalid input, try again.\n";
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            continue;
+    bool running = true;
+    SDL_Event event;
+
+    while (running) {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT)
+                running = false;
         }
 
-        Move m{x, y};
-        Board::MoveEvaluation eval = board.evaluateMove(m, current);
+        renderer.clear();
+        renderer.drawBoard();
+        renderer.present();
 
-        if (!eval.legal) {
-            std::cout << "Illegal move";
-            if (eval.freeThrees >= 2 && !eval.wouldCapture)
-                std::cout << " — forbidden double-three (no capture to justify it)";
-            std::cout << ", try again.\n";
-            continue;
-        }
-
-        if (!board.placeStone(Move{x, y}, current)) {
-            std::cout << "Illegal move, try again.\n";
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            continue;
-        }
-
-        int freeThrees = board.countFreeThrees(Move{x, y}, current);
-        if (freeThrees > 0)
-            std::cout << "Free-three(s) created: " << freeThrees << "\n";
-
-
-        int captured = board.checkAndApplyCaptures(Move{x, y}, current);
-        if (captured > 0)
-            std::cout << "Black captured: " << board.capturedBy(Player::Black)
-          << " | White captured: " << board.capturedBy(Player::White) << "\n";
-
-        Board::WinResult win = board.checkWinConditions(Move{x, y}, current);
-        if (win.won) {
-            board.print();
-            std::cout << (win.winner == Player::Black ? "Black" : "White") << " wins by "
-                    << (win.reason == Board::WinReason::Capture ? "capture" : "alignment") << "!\n";
-            break;
-        }
-        
-
-        current = (current == Player::Black) ? Player::White : Player::Black;
+        // Goal: cap the loop to roughly 60fps. Without this, the render loop
+        // spins as fast as the CPU allows with nothing to wait on — pegging
+        // one core at 100% for a static board that never even changes. This
+        // matters more once the game loop is doing real work every frame.
+        SDL_Delay(16);
     }
 
     return 0;
