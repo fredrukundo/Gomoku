@@ -103,6 +103,84 @@ as a side effect of a capture is allowed.
 Thin `bool`-only wrapper around `evaluateMove`, for callers (like the GUI later)
 that just need a yes/no without the detail.
 
+### `setRaw(x, y, Cell c)`  *(Step 9)*
+Raw, rules-bypassing stone placement — no legality, capture, or win-state logic.
+Exists purely for AI search, which tries and undoes thousands of hypothetical
+moves per real move and can't afford (or want) the full rules pipeline each time.
+Never called from the real game loop, only from search code.
+
+---
+
+## `ai/Minimax.hpp` / `Minimax.cpp`
+
+### `Minimax(int maxDepth)` — constructor  *(Step 9)*
+Stores the search depth. Note: `maxDepth` is later overwritten on every iteration
+by `findBestMoveTimed` — the constructor's value only matters if `findBestMove` is
+called directly, standalone, without going through the timed wrapper.
+
+### `candidateMoves(board, radius = 2)`  *(Step 10)*
+Returns only empty cells within `radius` of an existing stone, instead of every
+empty cell on the board. This is what makes deep search conceivable at all —
+without it, the branching factor is ~359 and depth 3 alone took over two minutes
+(measured directly in Step 9). Falls back to the center cell when the board is
+completely empty, since radius has nothing to anchor to on the opening move.
+
+### `patternWeight(length, openStart, openEnd)`  *(Step 11)*
+A lookup table translating a run's length and openness into a danger score — the
+core of "shape matters more than stone count." An open three (free-three, same
+concept as Step 6) scores far higher than a blocked one, because it can become an
+unstoppable open four unless blocked immediately.
+
+### `scorePlayerPatterns(board, p)`  *(Step 11)*
+Scans the whole board once, finds every run belonging to player `p` in all 4
+directions, and sums `patternWeight` over each one. Only starts counting at the
+true beginning of a run (checks the cell just behind isn't the same player) so a
+single run isn't counted once per stone in it.
+
+### `evaluateHeuristic(board, aiPlayer)`  *(Step 11)*
+The real evaluation function, replacing the Step 9 stub. Combines
+`scorePlayerPatterns(aiPlayer) - scorePlayerPatterns(opponent)` with a weighted
+capture-count difference, since reaching 10 captures is an independent win
+condition worth scoring on its own, not just a side effect of stone totals.
+
+### `evaluateStub(board, aiPlayer)`  *(Step 9, superseded)*
+The original "mine minus theirs" stone-counting heuristic, kept only for
+reference/comparison — no longer called anywhere in the search. Candidate for
+deletion once `evaluateHeuristic` has been trusted for a while (same treatment as
+the old `checkWin`).
+
+### `minimax(board, depth, maximizing, aiPlayer, alpha, beta)`  *(Step 9, updated Steps 12–13)*
+The recursive search itself. `maximizing` alternates each level — true means it's
+the AI's simulated turn (pick the highest-scoring move), false means the
+opponent's simulated turn (assumed to play optimally against the AI, so pick the
+lowest-scoring move). At `depth == 0`, returns the heuristic score of that
+hypothetical board. Uses `findWinningLine` (side-effect-free) as a short-circuit —
+a forced win/loss scores far outside the heuristic's normal range so it always
+dominates. **Step 12** added `alpha`/`beta`: once `alpha >= beta`, the rest of the
+current node's moves are skipped, since they can't change the outcome at a
+shallower level — same final answer as plain minimax, just without wasted work.
+**Step 13** added a periodic deadline check (every 1024 nodes, to keep the
+`chrono` call overhead negligible) that sets `aborted = true` and unwinds
+immediately once the time budget is spent mid-search.
+
+### `findBestMove(board, aiPlayer, preferredFirst = nullptr)`  *(Step 9, updated Steps 12–13)*
+The entry point for one fixed-depth search: tries every candidate move at the
+root, keeps whichever scores highest. **Step 13** added `preferredFirst` — when
+given, that move is moved to the front of the candidate list before searching, so
+alpha-beta tightens its bounds almost immediately instead of only after finding a
+good move by chance. This is what actually gives iterative deepening its pruning
+payoff (a first version of Step 13 described this reuse but never implemented it —
+caught and fixed once real testing showed depth stalling out far below target).
+
+### `findBestMoveTimed(board, aiPlayer, timeLimitMs, depthReached)`  *(Step 13)*
+The real entry point used by the game. Runs `findBestMove` at depth 1, then 2,
+then 3... feeding each depth's winning move into the next depth's search via
+`preferredFirst`. Stops the instant the time budget is spent (checked inside
+`minimax`, not just between depths) and discards whatever depth was mid-search
+when that happened — `depthReached` and the returned move only ever reflect a
+depth that *fully completed*, so the move handed back is always trustworthy, not
+a partial guess.
+
 ---
 
 ## `main.cpp`
@@ -114,3 +192,31 @@ through the Board's public API in order: `placeStone` → `checkAndApplyCaptures
 `checkWinConditions`. This loop is a temporary stand-in for what the real game loop
 (GUI-driven) will do starting at Step 14 — the sequence of API calls stays the same,
 only the input/output mechanism changes.
+
+
+
+#include "engine/Board.hpp"
+#include "ai/Minimax.hpp"
+#include <iostream>
+#include <chrono>
+
+int main() {
+    Board board;
+board.setRaw(5, 5, Cell::Black);
+board.setRaw(6, 5, Cell::Black);
+board.setRaw(7, 5, Cell::Black);
+
+Minimax ai(1);
+int depthReached = 0;
+
+auto start = std::chrono::steady_clock::now();
+SearchResult result = ai.findBestMoveTimed(board, Player::White, 400.0, depthReached);
+auto end = std::chrono::steady_clock::now();
+double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+std::cout << "Move: (" << result.bestMove.x << "," << result.bestMove.y << ")\n";
+std::cout << "Score: " << result.score << "\n";
+std::cout << "Depth reached: " << depthReached << "\n";
+std::cout << "Total time: " << ms << " ms\n";
+    return 0;
+}
