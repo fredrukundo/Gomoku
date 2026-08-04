@@ -20,7 +20,29 @@ public:
     // Goal: creates the window, renderer, and loads fonts. Returns false on any
     // failure so main.cpp can print an error and exit cleanly, instead of the
     // program crashing on a null pointer deref deeper in the code.
-    bool init(const std::string& fontPath);
+    bool init(const std::string& fontPath, const std::string& boldFontPath);
+
+    // Goal: draws every stone currently on 'board'. 'lastMove', if valid (x >= 0),
+    // gets a small ring drawn around it so the player can immediately spot the
+    // most recent move on a busy board — a genuine beginner-friendliness aid, not
+    // just decoration.
+    void drawStones(const Board& board, Move lastMove);
+
+    // Goal: renders the right-side info panel: whose turn it is, each player's
+    // capture count out of the 10 needed to win by capture, and a status/message
+    // line (illegal move explanations, win announcements, etc.) — all in plain
+    // language, since a beginner won't know terms like "double-three" without
+    // them being spelled out when relevant.
+    void drawSidePanel(Player currentPlayer, int blackCaptured, int whiteCaptured,
+                        const std::string& statusMessage);
+    
+    // Goal: wraps 'text' to fit within maxWidth pixels, breaking on word
+    // boundaries, and draws each resulting line. Needed because status messages
+    // (illegal-move reasons, win announcements) vary in length and the side panel
+    // has a fixed width — a single un-wrapped line can overflow past the window
+    // edge, as seen with longer messages like the double-three explanation.
+    void drawWrappedText(const std::string& text, int x, int y, int maxWidth,
+                        SDL_Color color, TTF_Font* font, int lineSpacing = 20);
 
     void clear();
     void drawBoard();
@@ -36,10 +58,17 @@ public:
 private:
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
-    TTF_Font* labelFont = nullptr;
+    TTF_Font* bodyFont = nullptr;
+    TTF_Font* headerFont = nullptr;
 
     void drawGridLines();
     void drawStarPoints();
     void drawCoordinateLabels();
-    void drawText(const std::string& text, int x, int y, SDL_Color color);
+    void drawText(const std::string& text, int x, int y, SDL_Color color, TTF_Font* font);
+
+    // Goal: self-contained filled-circle drawing (replaces SDL2_gfx, which
+    // isn't available on this system). Draws horizontal scanlines across the
+    // circle's width at each row — simple, correct, and fast enough for 361
+    // cells redrawn every frame.
+    void drawFilledCircle(int centerX, int centerY, int radius, SDL_Color color);
 };
