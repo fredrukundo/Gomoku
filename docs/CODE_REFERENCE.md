@@ -1,313 +1,623 @@
 # Gomoku — Code Reference
 
-Plain-language explanation of what every finished function does and why it exists.
-Updated at the end of each step — keep this in `docs/CODE_REFERENCE.md` in the repo.
-This is also your defense-prep cheat sheet: if you can't explain an entry here without
-looking at the code, revisit it before the defense.
+Plain-language explanation of every function in the project: what it does and why it
+exists. Keep this at `docs/CODE_REFERENCE.md` in the repo.
+
+This doubles as defense preparation. The subject requires you to explain the Minimax
+implementation and the heuristic *thoroughly* — if you can't explain an entry here
+without opening the code, revisit it before the defense.
+
+Organized by module, matching the folder layout. Within each module, functions are
+grouped by role rather than listed in file order.
+
+**Contents**
+
+- [Architecture at a glance](#architecture-at-a-glance)
+- [common/Types.hpp](#commontypeshpp)
+- [engine/Board](#engineboard)
+- [ai/Minimax](#aiminimax)
+- [ui/Renderer](#uirenderer)
+- [ui/InputHandler](#uiinputhandler)
+- [main.cpp](#maincpp)
+- [Known limitations](#known-limitations)
 
 ---
 
-## `engine/Board.hpp` / `Board.cpp`
+## Architecture at a glance
 
-### `Board()` — constructor
+Three layers, strictly one-directional. Nothing lower ever reaches upward.
+
+```
+main.cpp          game loop; owns all game state; wires the layers together
+   |
+   +-- ui/        Renderer (all SDL drawing), InputHandler (pixels -> cells)
+   +-- ai/        Minimax (search); calls into engine, never into ui
+   +-- engine/    Board (rules, captures, win conditions); depends on nothing
+   +-- common/    shared plain types used by every layer
+```
+
+`Board` holds no knowledge of the AI or the UI. `Minimax` uses `Board` but never
+draws. `Renderer` draws but never decides. `main.cpp` is the only place that knows
+about all three.
+
+---
+
+## `common/Types.hpp`
+
+Plain data types shared across every layer. Deliberately dependency-free so the UI
+can talk about moves and scores without including the AI headers.
+
+| Type | Purpose |
+|---|---|
+| `Cell` | What occupies a board intersection: `Empty`, `Black`, `White`. |
+| `Player` | Whose turn / whose stones: `Black`, `White`. Distinct from `Cell` because a player is never "empty". |
+| `Move` | An `{x, y}` board coordinate, 0-indexed. |
+| `ScoredMove` | A `Move` plus the score the search assigned it. Lives here rather than in `Minimax.hpp` so the debug view can render search results without the `ui` layer including the `ai` layer. |
+
+---
+
+## `engine/Board`
+
+Files: `include/engine/Board.hpp`, `src/engine/Board.cpp`
+
+The authoritative game state and every rule from the subject. This layer is
+self-contained: no SDL, no AI, no I/O. That's what makes it unit-testable in
+`tests/rules_tests.cpp` without any of the rest of the program.
+
+### Board access and basic placement
+
+#### `Board()` — constructor
 Initializes the 19x19 grid so every cell starts as `Cell::Empty`.
 
-### `isInBounds(x, y)`
+#### `isInBounds(x, y)`
 Single source of truth for "is this coordinate actually on the board." Every function
-that touches `grid[][]` goes through this first — this exists specifically because the
-subject requires the program to *never* crash, and an unchecked index is the easiest
-way to violate that.
+that touches `grid[][]` goes through this first. It exists specifically because the
+subject requires the program to *never* crash, and an unchecked array index is the
+easiest way to violate that.
 
-### `isEmpty(x, y)`
-Combines the bounds check and the emptiness check into one call, since almost every
-rule check needs both together.
+#### `isEmpty(x, y)`
+Combines the bounds check and the emptiness check, since nearly every rule check
+needs both together.
 
-### `get(x, y)`
-Safe read access to a cell. Returns `Empty` for anything out of bounds instead of
-crashing, so callers never need to bounds-check before reading.
+#### `get(x, y)`
+Safe read access to a cell. Returns `Empty` for anything out of bounds rather than
+indexing invalid memory, so callers never have to bounds-check before reading.
 
-### `placeStone(Move m, Player p)`
-The only way a stone gets added to the board. Rejects the move (returns `false`,
-doesn't mutate the board) if the target cell isn't empty or in bounds. Does **not**
-yet enforce full legality (double-three rejection comes later, in Steps 6–7) — at
-this stage it only guarantees basic physical validity.
+#### `placeStone(Move m, Player p)`
+The only way a stone is added during real play. Refuses (returns `false`, board
+unchanged) if the cell isn't empty or in bounds. Note it does **not** enforce the
+double-three rule — that's `evaluateMove`'s job, and `main.cpp` calls that first.
 
-### `print()`
-Text dump of the board, used for console-testing before the GUI exists (Step 14+).
-Will be dropped/unused once the real renderer is built.
+#### `setRaw(x, y, Cell c)`
+Rules-bypassing placement: no legality, no captures, no win tracking. Exists purely
+for AI search, which places and removes tens of thousands of hypothetical stones per
+move and must not touch real game state while doing it. Never called from the game
+loop.
 
-### `checkAndApplyCaptures(Move last, Player p)`  *(Step 4)*
+#### `print()`
+Text dump of the board. Used for console testing before the GUI existed; retained for
+debugging.
+
+### Captures
+
+#### `checkAndApplyCaptures(Move last, Player p)`
 After a stone is placed, scans all 8 directions for the exact pattern
-`mine-opponent-opponent-mine`. On a match, removes the two opponent stones and adds
-2 to that player's capture count. Only an *exact* pair matches — this is why 1 stone
-or 3+ stones in a row are never captured, without needing special-case code (see the
-"safe move into a capture" test from Appendix VI).
+`mine-opponent-opponent-mine`. On a match, removes those two opponent stones and adds
+2 to the capturing player's total. Because the pattern must match *exactly*, a single
+stone or three-in-a-row is never captured — the subject's "you cannot be captured by
+moving into a flanked position" case falls out of the pattern rather than needing
+special handling.
 
-### `capturedBy(Player p)`  *(Step 4)*
-Exposes each player's running capture total. Needed for the 10-capture win condition.
+#### `capturedBy(Player p)`
+That player's running capture total. Feeds the 10-capture win condition and the side
+panel display.
 
-### `findWinningLine(Move last, Player p)`  *(Step 5)*
-The sole win-detection function (Step 3's separate `checkWin` was removed once this
-superseded it). Returns the actual ordered list of board cells making up a 5+
-alignment through the last-placed stone, or an empty vector if there isn't one.
-Walks backward to the start of the run first, then forward, so the result is
-spatially ordered — required for `isLineVulnerable` to correctly check same-color
-neighbors of each line stone.
+#### `wouldCaptureAnyPair(Move last, Player p)`
+Read-only twin of `checkAndApplyCaptures`: same 8-direction check, no mutation. Lets
+legality testing ask "would this move capture something?" without committing to the
+move.
 
-### `isLineVulnerable(line, attacker)`  *(Step 5, corrected)*
-Implements the rule "a 5-alignment only wins if the opponent can't immediately break
-it by capturing a pair." **Important correction from the first version:** it does
-*not* just check pairs formed by consecutive stones along the winning line's own
-axis — that can never trigger, since every internal pair in a solid run is flanked
-by another same-color line stone, never an open/opponent flank. The real check is:
-for every stone in the line, look in all 4 directions for *any* same-color neighbor
-(on or off the line's own axis) that forms a capturable pair — one flank already
-the opponent's, the other flank empty. A single stone in the winning line can be
-vulnerable through a completely different-axis pair (e.g. a horizontal line is
-broken via a vertical capture on one of its stones).
+### Win conditions
 
-### `checkWinConditions(Move last, Player p)`  *(Step 5)*
-The single entry point `main.cpp` calls after every move. Combines three checks in
-order:
-1. **10-capture win** — direct, no deferral.
-2. **A fresh alignment from this move** — finalized immediately if not vulnerable,
-   or marked "pending" (giving the opponent one move to break it) if it is.
-3. **Resolution of a previously pending win** — after the opponent's response, checks
-   whether the line they had one chance to break is still intact. If so, the win is
-   now final, credited to the original player (not the one who just moved).
+#### `findWinningLine(Move last, Player p)`
+Detects a 5-or-more alignment through the last-placed stone and returns the actual
+ordered cells of that line (empty vector if none). Walks backward to the run's start
+first, then forward, so the result is spatially ordered — required both for
+`isLineVulnerable` and for drawing the win highlight.
 
-### `extractLine(center, dx, dy, radius, p)`  *(Step 6)*
-Pulls a 1D slice of the board along one direction, centered on a cell, and encodes
-it as a string (`X` = this player, `O` = opponent, `#` = off-board, `.` = empty).
-Turning the board into a short string like this is what makes pattern-matching for
-free-threes simple and readable, instead of juggling raw coordinates everywhere.
+#### `hasWinningLine(Move last, Player p)`
+Non-allocating yes/no version of the above, for the search's hot path.
+`findWinningLine` returns a `std::vector`, and at tens of thousands of calls per
+search those heap allocations were pure waste when only a boolean was needed.
+`findWinningLine` remains in use by the UI, which needs the actual cells.
 
-### `countFreeThrees(Move last, Player p)`  *(Step 6)*
-Counts how many free-three shapes (straight `.XXX.` or broken `.XX.X.` / `.X.XX.`)
-pass through the just-placed stone, checked across all 4 axes. Used directly by
-Step 7's double-three legality rule.
+#### `isLineVulnerable(line, attacker)`
+Implements the subject's endgame-capture rule: a five only wins if the opponent can't
+immediately break it by capturing a pair.
 
-### `wouldCaptureAnyPair(Move last, Player p)`  *(Step 7)*
-Read-only twin of `checkAndApplyCaptures` — checks the same 8-direction flank
-pattern but never mutates the board. Exists so legality checks can ask "would this
-move capture anything?" without committing to the move first.
+The first implementation of this was wrong and worth understanding. It checked only
+pairs formed by *consecutive stones along the winning line's own axis* — which can
+never trigger, because every internal pair of a solid run is flanked by another
+same-colour line stone, never by an empty cell. The correct check is: for each stone
+in the line, look in all 4 directions for *any* same-colour neighbour, on or off the
+line's axis, forming a capturable pair (opponent stone on one flank, empty cell on
+the other). A horizontal five can be broken by a vertical capture on one of its
+stones.
 
-### `evaluateMove(Move m, Player p)`  *(Step 7)*
-The core legality check. Temporarily places the stone, reads off whether it would
-capture anything and how many free-threes it creates, then rolls the placement back
-before returning. A move is illegal only if it creates 2+ free-threes **and** would
-capture nothing — this is the subject's explicit exception: a double-three created
-as a side effect of a capture is allowed.
+#### `checkWinConditions(Move last, Player p)`
+The single entry point called after every move. Three checks, in order:
 
-### `isLegal(Move m, Player p)`  *(Step 7)*
-Thin `bool`-only wrapper around `evaluateMove`, for callers (like the GUI later)
-that just need a yes/no without the detail.
+1. **10-capture win** — immediate, no deferral.
+2. **A fresh alignment** — wins instantly if not vulnerable; otherwise recorded as
+   *pending*, giving the opponent exactly one move to break it.
+3. **Resolution of a pending win** — after the opponent's reply, checks whether the
+   line survived. If so, the win is now final and credited to the *original* player,
+   not the one who just moved.
 
-### `setRaw(x, y, Cell c)`  *(Step 9)*
-Raw, rules-bypassing stone placement — no legality, capture, or win-state logic.
-Exists purely for AI search, which tries and undoes thousands of hypothetical
-moves per real move and can't afford (or want) the full rules pipeline each time.
-Never called from the real game loop, only from search code.
+### Free-threes and legality
 
----
+#### `extractLine(center, dx, dy, radius, p)`
+Pulls a 1D slice of the board along one direction and encodes it as a string:
+`X` = this player, `O` = opponent, `#` = off-board, `.` = empty. Turning a board
+region into a short string makes free-three pattern matching readable, instead of
+juggling raw coordinates.
 
-## `ai/Minimax.hpp` / `Minimax.cpp`
+#### `countFreeThrees(Move last, Player p)`
+Counts how many free-three shapes pass through the just-placed stone across all 4
+axes. Matches the straight form `.XXX.` and both broken forms `.XX.X.` and `.X.XX.`.
+Only counts a match that actually covers the new stone, so pre-existing patterns
+aren't attributed to this move.
 
-### `Minimax(int maxDepth)` — constructor  *(Step 9)*
-Stores the search depth. Note: `maxDepth` is later overwritten on every iteration
-by `findBestMoveTimed` — the constructor's value only matters if `findBestMove` is
-called directly, standalone, without going through the timed wrapper.
+#### `evaluateMove(Move m, Player p)`
+The core legality check, and the implementation of the double-three rule. Temporarily
+places the stone, records whether it would capture and how many free-threes it
+creates, then rolls the placement back before returning. The move is illegal only
+when it creates 2+ free-threes **and** captures nothing — the subject's explicit
+exception being that a double-three produced by a capture is allowed.
 
-### `candidateMoves(board, radius = 2)`  *(Step 10)*
-Returns only empty cells within `radius` of an existing stone, instead of every
-empty cell on the board. This is what makes deep search conceivable at all —
-without it, the branching factor is ~359 and depth 3 alone took over two minutes
-(measured directly in Step 9). Falls back to the center cell when the board is
-completely empty, since radius has nothing to anchor to on the opening move.
-
-### `patternWeight(length, openStart, openEnd)`  *(Step 11)*
-A lookup table translating a run's length and openness into a danger score — the
-core of "shape matters more than stone count." An open three (free-three, same
-concept as Step 6) scores far higher than a blocked one, because it can become an
-unstoppable open four unless blocked immediately.
-
-### `scorePlayerPatterns(board, p)`  *(Step 11)*
-Scans the whole board once, finds every run belonging to player `p` in all 4
-directions, and sums `patternWeight` over each one. Only starts counting at the
-true beginning of a run (checks the cell just behind isn't the same player) so a
-single run isn't counted once per stone in it.
-
-### `evaluateHeuristic(board, aiPlayer)`  *(Step 11)*
-The real evaluation function, replacing the Step 9 stub. Combines
-`scorePlayerPatterns(aiPlayer) - scorePlayerPatterns(opponent)` with a weighted
-capture-count difference, since reaching 10 captures is an independent win
-condition worth scoring on its own, not just a side effect of stone totals.
-
-### `evaluateStub(board, aiPlayer)`  *(Step 9, superseded)*
-The original "mine minus theirs" stone-counting heuristic, kept only for
-reference/comparison — no longer called anywhere in the search. Candidate for
-deletion once `evaluateHeuristic` has been trusted for a while (same treatment as
-the old `checkWin`).
-
-### `minimax(board, depth, maximizing, aiPlayer, alpha, beta)`  *(Step 9, updated Steps 12–13)*
-The recursive search itself. `maximizing` alternates each level — true means it's
-the AI's simulated turn (pick the highest-scoring move), false means the
-opponent's simulated turn (assumed to play optimally against the AI, so pick the
-lowest-scoring move). At `depth == 0`, returns the heuristic score of that
-hypothetical board. Uses `findWinningLine` (side-effect-free) as a short-circuit —
-a forced win/loss scores far outside the heuristic's normal range so it always
-dominates. **Step 12** added `alpha`/`beta`: once `alpha >= beta`, the rest of the
-current node's moves are skipped, since they can't change the outcome at a
-shallower level — same final answer as plain minimax, just without wasted work.
-**Step 13** added a periodic deadline check (every 1024 nodes, to keep the
-`chrono` call overhead negligible) that sets `aborted = true` and unwinds
-immediately once the time budget is spent mid-search.
-
-### `findBestMove(board, aiPlayer, preferredFirst = nullptr)`  *(Step 9, updated Steps 12–13)*
-The entry point for one fixed-depth search: tries every candidate move at the
-root, keeps whichever scores highest. **Step 13** added `preferredFirst` — when
-given, that move is moved to the front of the candidate list before searching, so
-alpha-beta tightens its bounds almost immediately instead of only after finding a
-good move by chance. This is what actually gives iterative deepening its pruning
-payoff (a first version of Step 13 described this reuse but never implemented it —
-caught and fixed once real testing showed depth stalling out far below target).
-
-### `findBestMoveTimed(board, aiPlayer, timeLimitMs, depthReached)`  *(Step 13)*
-The real entry point used by the game. Runs `findBestMove` at depth 1, then 2,
-then 3... feeding each depth's winning move into the next depth's search via
-`preferredFirst`. Stops the instant the time budget is spent (checked inside
-`minimax`, not just between depths) and discards whatever depth was mid-search
-when that happened — `depthReached` and the returned move only ever reflect a
-depth that *fully completed*, so the move handed back is always trustworthy, not
-a partial guess.
+#### `isLegal(Move m, Player p)`
+Thin `bool` wrapper over `evaluateMove`, for callers that only need yes/no.
 
 ---
 
-## `ui/Renderer.hpp` / `Renderer.cpp`  *(Step 14)*
+## `ai/Minimax`
 
-### `Renderer()` / `~Renderer()`
-Constructor does nothing (SDL setup happens in `init`, not here, so failure can
-be reported cleanly rather than crashing from a constructor). The destructor
-tears down every SDL resource in reverse order (fonts, then renderer, then
-window, then the TTF/SDL subsystems) — guarantees no resource leak even on an
-early `return` from `main`, relevant to the subject's "never crash / never
-quit unexpectedly" rule, since a slow leak across repeated games could
-eventually cause exactly that.
+Files: `include/ai/Minimax.hpp`, `src/ai/Minimax.cpp`
 
-### `init(fontPath, boldFontPath)`
-Creates the SDL window, renderer, and both fonts (regular + bold, for visual
-hierarchy in the side panel). Returns `false` on any failure instead of
-continuing with a null pointer, so `main.cpp` can exit cleanly with an error
-instead of crashing deeper in the code. Also enables `SDL_BLENDMODE_BLEND` —
-without this, SDL2 ignores alpha entirely, which silently broke the stone
-shadow (see the `drawStones` note below) until caught during testing.
+Move search. Depth-limited minimax with alpha-beta pruning, iterative deepening under
+a hard time budget, move ordering, forward pruning, and a transposition table.
 
-### `clear()` / `present()`
-Thin wrappers around `SDL_RenderClear`/`SDL_RenderPresent`, setting the warm
-wood-tone background color first. Exist mainly so `main.cpp` never touches raw
-SDL calls directly — all rendering goes through `Renderer`'s API.
+### Search entry points
 
-### `drawBoard()`
-Draws the grid lines, the 9 traditional star points (rows/columns 4, 10, 16 —
-both decorative and a genuine distance-judging aid), and the coordinate labels
-(`A`-`T` skipping `I`, `1`-`19`). Composed from three private helpers
-(`drawGridLines`, `drawStarPoints`, `drawCoordinateLabels`) kept separate for
-readability even though they're always called together.
+#### `findBestMoveTimed(board, aiPlayer, timeLimitMs, depthReached)`
+The entry point the game actually uses. Runs `findBestMove` at depth 1, then 2, then
+3, and so on, feeding each depth's winning move into the next depth as the first move
+to try. Stops the moment the time budget is spent — checked *inside* `minimax`, not
+merely between depths — and discards whatever depth was mid-search when that
+happened. `depthReached` and the returned move therefore always reflect a depth that
+fully completed, never a partial guess.
 
-### `drawText(text, x, y, color, font)`
-Renders one line of text via SDL_ttf: builds a surface, converts it to a
-texture, blits it, then frees both — texture/surface objects aren't reused
-across frames for simplicity, acceptable at this text volume. Fails silently
-(returns without drawing) rather than crashing if the surface can't be built,
-since a missing label must never take down the whole game.
+Iterative deepening looks wasteful (each depth re-searches everything shallower) but
+pays for itself twice over: it guarantees a usable answer whenever time runs out, and
+the best-move reuse it enables is the single largest contributor to alpha-beta's
+pruning efficiency.
 
-### `drawWrappedText(text, x, y, maxWidth, color, font, lineSpacing)`
-Word-wraps text to fit `maxWidth` before drawing, breaking only on word
-boundaries (never mid-word). Added after testing showed longer status messages
-(e.g. the double-three explanation) overflowing the fixed-width side panel
-with the plain `drawText`.
+#### `findBestMove(board, aiPlayer, preferredFirst)`
+One fixed-depth search from the root. Generates candidates, orders them, caps the
+list, tries each, and keeps the highest-scoring. `preferredFirst`, when supplied, is
+moved to the front — that's the previous iteration's fully-verified answer, which
+tightens alpha almost immediately.
 
-### `drawFilledCircle(centerX, centerY, radius, color)`
-Hand-rolled filled-circle drawing (horizontal scanline per row), replacing
-`SDL2_gfx` — that library's dev headers weren't available on this system with
-no sudo access, and since only filled circles were ever needed from it,
-writing this directly removed the dependency entirely rather than working
-around the missing headers.
+#### `minimax(board, depth, maximizing, aiPlayer, alpha, beta)`
+The recursive search itself.
 
-### `drawStones(board, lastMove)`
-Draws every stone on the board: a soft offset shadow, then the stone itself
-(white stones get a thin outline so they don't blend into the light
-background), then a red ring around whichever cell matches `lastMove`. The
-ring's radius is deliberately kept under half a cell width so it never
-visually overlaps a directly-adjacent neighboring stone — an early version
-didn't do this and produced a smudged look on adjacent moves (see the
-shadow/blend-mode fix above for the other half of that same visual bug).
+`maximizing` alternates every level: true means it's the AI's simulated turn, so it
+takes the highest-scoring child; false means the opponent's, so it takes the lowest —
+the algorithm assumes the opponent always plays the strongest reply available. At
+`depth == 0` it returns the heuristic score of the position.
 
-### `drawWinLine(line)`
-Draws a highlighted line from the first to the last cell of a winning
-alignment (`line` comes directly from `Board::findWinningLine`, already
-spatially ordered). A few offset parallel `SDL_RenderDrawLine` calls
-approximate a thicker stroke, since plain SDL2 only draws 1px lines natively.
+**Alpha-beta**: `alpha` is the best score the maximizer can already guarantee, `beta`
+the best the minimizer can. Once `alpha >= beta`, the remaining moves at that node
+cannot change the outcome at any shallower level, so the loop breaks. This never
+changes the answer plain minimax would give — only the time taken to reach it.
 
-### `drawSidePanel(currentPlayer, blackCaptured, whiteCaptured, statusMessage, aiInfo, aiThinking)`
-Renders the whole right-hand info panel: whose turn it is (with a
-"(thinking...)" suffix while the AI is searching), capture counts out of 10,
-a persistent "AI last move" section (this is what satisfies the subject's
-mandatory AI-timer-display requirement), a plain-language "How to win"
-reference for beginners, and any current status message. Organized top-to-
-bottom with divider lines between sections for visual structure.
+**Terminal detection**: both win conditions short-circuit here — an alignment via
+`hasWinningLine`, and 10 captures via `totalCapturedBy`. Terminal scores are set far
+outside the heuristic's normal range, offset by remaining depth so a faster forced
+win outranks a slower one.
 
-### `drawGameOverOverlay(winnerText)`
-Dims the board (relies on the blend mode enabled in `init`) and draws a
-centered winner banner plus a restart prompt. Text centering is approximate
-(estimated from character count, not measured via `TTF_SizeText`) — good
-enough for a banner, avoids adding a text-measurement dependency just for
-this one case.
+**Time**: `checkTimeUp` is called at node entry *and* again after move ordering,
+because ordering itself costs real time that would otherwise go unmeasured between
+checks.
+
+### Board mutation during search
+
+The search maintains its own copy of the occupancy information rather than
+re-deriving it from the board, because the naive versions were re-scanning all 361
+cells at every node.
+
+#### `stonePositions` + `posIndex` — the sparse set
+`stonePositions` lists every occupied cell; `posIndex` maps a cell back to its slot in
+that list. This started as a simple push/pop stack, which worked only while moves were
+placed and undone in strict LIFO order. Captures broke that — they remove stones from
+the *middle* of the list — so removal is now swap-with-last plus an index fixup, O(1)
+and order-independent. List order is arbitrary; nothing depends on it.
+
+#### `addStone(m)` / `removeStone(m)`
+Maintain the sparse set. Not called directly by search logic — always via
+`applyMove`/`undoMove`, so the set can never drift from the board.
+
+#### `syncStonePositions(board)`
+Rebuilds the sparse set, the capture counters, and the Zobrist hash from the real
+board. Called at the top of every `findBestMove`. This is essential: the hash is
+otherwise only updated incrementally by `applyMove`/`undoMove`, but the *real* game's
+moves (a human click, or the AI's own move being committed in `main.cpp`) go through
+`Board::placeStone` and never touch it. Without this resync the hash would silently
+drift and the transposition table would return scores from the wrong positions.
+
+#### `applyMove(board, m, c)` / `undoMove(board, m)`
+Apply and exactly reverse one hypothetical move, *including captures*. Each apply
+pushes a `MoveUndo` recording the placed colour, the captured colour, and which cells
+were removed — a fixed 16-entry array (8 directions × one pair) so applying a move
+never allocates.
+
+Capture detection is duplicated here rather than calling
+`Board::checkAndApplyCaptures`, deliberately: that method mutates the real game's
+capture counters and returns no undo information, both wrong for a hypothetical move.
+
+#### `searchCapturedByBlack` / `searchCapturedByWhite`, `totalCapturedBy(board, p)`
+Capture counts accumulated by hypothetical moves, kept separate from the board's real
+counters so the search can never corrupt actual game state. `totalCapturedBy` adds the
+two together wherever the true count matters — evaluation, and the 10-capture terminal
+check.
+
+### Move generation and ordering
+
+#### `candidateMoves(board, radius = 2)`
+Returns only empty cells within `radius` of an existing stone, rather than every empty
+cell. This is what makes deep search possible at all: unrestricted, the branching
+factor is ~359 and depth 3 alone took over two minutes when measured. Radius 2 rather
+than 1 because broken-three shapes like `.XX.X.` have relevant cells two steps away.
+Falls back to the centre cell on an empty board, since radius has nothing to anchor to
+on the opening move.
+
+#### `localRunScore(board, m, p)`
+Estimates how strong a run player `p` would have through cell `m`, scanning outward a
+bounded number of steps in each direction rather than examining the whole board.
+
+#### `quickLocalScore(board, m, mover)`
+Ordering score for one candidate: the mover's own potential *plus* the opponent's
+potential at the same cell. Including the opponent's captures blocking value cheaply —
+a cell that would be excellent for them is worth denying.
+
+#### `orderMovesByQuickScore(board, moves, mover)`
+Sorts candidates best-first. Alpha-beta prunes far more when good moves come first, so
+ordering quality directly determines reachable depth.
+
+An earlier version scored candidates with the full `evaluateHeuristic`, which rescans
+the whole board. Accurate, but ruinous at ordering-time cost, and it made deep search
+*worse* on busy boards. The lesson worth stating at a defense: an ordering heuristic
+must be **cheap**, not accurate — accuracy is what the search depth itself is for.
+Uses `partial_sort`, since only the kept prefix needs ordering.
+
+#### `MAX_CANDIDATES_PER_NODE` / `MAX_CANDIDATES_AT_ROOT`
+The dominant lever on reachable depth, and the most important thing to be able to
+justify.
+
+Nodes required grow as (effective branching)^depth, and under alpha-beta the effective
+branching is roughly the square root of the candidate count. Cutting the per-node cap
+from 12 to 6 takes effective branching from ~3.5 to ~2.5, which buys roughly three
+extra depth levels — far more than any constant-factor speedup can. Measured directly:
+every micro-optimization attempted produced no visible depth change, while this single
+change moved depth from 7-8 to 11.
+
+**This is forward pruning, and it must be stated plainly.** Only the top-N
+heuristically-ranked moves are explored at each node, so the search is no longer exact
+minimax: a genuinely best move ranked outside the top N is never seen. This is the
+standard, unavoidable trade-off for real-time play — exhaustive depth-10 search on a
+19x19 board is computationally impossible regardless of pruning quality. Claim the
+depth, not the optimality.
+
+### Evaluation (the heuristic)
+
+#### `patternWeight(length, openStart, openEnd)`
+The weight table translating a run's length and openness into a danger score. This
+encodes the core insight that *shape matters more than stone count*: four scattered
+stones are nearly worthless, while `.XXXX.` is already unstoppable. An open three
+scores far above a blocked three, because it becomes an open four — two winning cells
+at once, only one of which can be blocked.
+
+#### `scorePlayerPatterns(board, p)`
+Sums `patternWeight` over every run belonging to `p` across all 4 axes. Only begins
+counting at a run's true start (verified by checking the cell behind it) so a run of
+four isn't counted once per stone.
+
+Iterates the sparse set rather than all 361 cells. This runs at every leaf node,
+making it the most-called expensive function in the search — the difference between
+~15 stones and 361 cells per call is substantial. **Dependency worth knowing**: this
+requires `stonePositions` to be in sync with the board. Always true inside a search; a
+standalone external call must run `syncStonePositions` first.
+
+#### `evaluateHeuristic(board, aiPlayer)`
+The evaluation function. Combines the pattern score difference (mine minus theirs)
+with a capture score.
+
+The capture term is **progressive, not linear** — `(mine² − theirs²) × 15`. Since 10
+captures wins outright, the 8th stone lost matters far more than the 2nd. The original
+flat weighting treated every capture as equally cheap, which is one reason the AI lost
+capture races: it saw no escalating danger.
+
+#### `evaluateStub(board, aiPlayer)`
+The original "my stones minus theirs" heuristic from the search skeleton. No longer
+called; retained for reference and comparison.
+
+### Transposition table
+
+#### `initZobrist()` / `captureHashComponent()`
+Zobrist hashing: a precomputed random 64-bit number for every (cell, colour)
+combination, XORed together to hash a position. XOR is its own inverse, so a stone can
+be hashed in on placement and out on removal in O(1) — no re-hashing of the board at
+each node.
+
+`zobristCaptures` adds a component for each side's capture count. Without it, two
+positions with identical stones but different capture totals would collide, and the
+table would hand back a score computed for a different game state. The seed is fixed,
+so search behaviour is reproducible run to run — useful for debugging and for
+explaining a specific move choice consistently.
+
+#### `transpositionTable`
+Caches, keyed by position hash, what the search previously concluded there: score, the
+depth it was searched to, whether the score is exact or a bound, and the best move
+found. Two payoffs: genuine transpositions (A-then-B and B-then-A reach the same
+board, constantly, in Gomoku), and iterative deepening's re-walking of shallow
+positions at every new depth.
+
+Entries are only reused when stored at a depth at least as deep as currently needed.
+The stored best move is used as an ordering hint even when its depth is too shallow to
+reuse the score.
+
+**Realistic expectation, measured**: hit rates around 15% and a throughput gain around
+10%. Real, but not enough to buy a depth level on its own, since depth scales
+logarithmically with node count. Worth having; not the reason depth 10 was reached.
+
+#### `getTTHits()` / `getTTMisses()` / `getTTStores()` / `getTTSize()` / `resetTTStats()`
+Diagnostic counters, added when the table showed no measurable speedup and it wasn't
+clear whether the cause was a bug or an expected limitation. It was the latter — but
+the counters proved it rather than assuming it.
+
+### Timing and introspection
+
+#### `checkTimeUp()`
+Returns whether the search should stop, setting `aborted` once the deadline passes.
+Only reads the clock every 256 nodes, since `chrono` calls aren't free and doing it
+per node measurably slows the search.
+
+An early version checked only *between* depths, using a growth-rate guess to decide
+whether the next depth would fit. That overshot a 400 ms budget by more than 4×,
+because depth costs grow ~20× per level and no margin heuristic reliably out-guesses
+exponential growth. Checking inside the search and aborting immediately is the fix — a
+partial depth is thrown away rather than being allowed to run to completion.
+
+#### `getRootScores()` / `getLastCompletedDepth()`
+Expose every root candidate and the score the search gave it, sorted best-first.
+`findBestMove` always computed these and discarded all but the winner; keeping them is
+what makes the debug view possible.
+
+Only a **fully completed** depth's scores are published — an aborted depth's partial
+list would misrepresent the decision.
+
+**Caveat to state at the defense**: because of alpha-beta, only the top move's score is
+an exact evaluation. Lower-ranked moves were often cut off early and report the bound
+that triggered the cut, not a full evaluation. The *ranking* is meaningful; the losing
+numbers are not precise.
 
 ---
 
-## `ui/InputHandler.hpp` / `InputHandler.cpp`  *(Step 14c)*
+## `ui/Renderer`
 
-### `pixelToBoardCoord(pixelX, pixelY, outMove)`
-Converts a raw mouse-click pixel position into board coordinates — the exact
-inverse of `Renderer`'s `MARGIN`/`CELL_SIZE` placement math, so a click always
-lands on the same intersection a stone would actually be drawn at. Rounds to
-the *nearest* intersection, then rejects the click entirely if it's too far
-from that intersection (`CLICK_TOLERANCE`) to plausibly have been aimed at
-it — without this, any click vaguely near the board would silently snap to
-whatever line happened to be closest, which feels imprecise on a small 32px
-grid. A static method (no state) since it's a pure coordinate conversion with
-no reason to be an instance.
+Files: `include/ui/Renderer.hpp`, `src/ui/Renderer.cpp`
+
+Owns every SDL resource and all drawing. Nothing outside this class touches SDL, so
+the rest of the program never depends on the graphics library.
+
+### Lifecycle
+
+#### `Renderer()` / `~Renderer()`
+The constructor deliberately does nothing — SDL setup lives in `init` so failure can
+be reported and handled rather than thrown from a constructor. The destructor tears
+down fonts, renderer, window, and the SDL/TTF subsystems in reverse order,
+guaranteeing no leak even on an early return.
+
+#### `init(fontPath, boldFontPath)`
+Creates the window, renderer, and both fonts (regular and bold, for visual hierarchy).
+Returns `false` on any failure so `main` can exit cleanly rather than continuing with a
+null pointer.
+
+Also enables `SDL_BLENDMODE_BLEND`. Without it SDL ignores the alpha channel entirely
+and treats every colour as opaque — which silently rendered the stones'
+semi-transparent shadow as a solid offset blob, most visible as a smudge on black
+stones where nothing was drawn over it afterward.
+
+#### `clear()` / `present()`
+Wrap `SDL_RenderClear` (with the wood-tone background) and `SDL_RenderPresent`.
+
+### Text and primitives
+
+#### `drawText(text, x, y, color, font)`
+Renders one line via SDL_ttf: surface, texture, blit, free both. Returns silently
+without drawing if the surface can't be built — a missing label must never take down
+the game.
+
+#### `drawWrappedText(text, x, y, maxWidth, color, font, lineSpacing)`
+Word-wraps to fit a pixel width, breaking only between words. Added after long status
+messages (the double-three explanation in particular) overflowed the fixed-width side
+panel.
+
+#### `drawFilledCircle(centerX, centerY, radius, color)`
+Filled circle drawn as one horizontal span per row. Written by hand to replace
+`SDL2_gfx`, whose development headers weren't available on the build machine and
+couldn't be installed without root. Since filled circles were the only thing needed
+from that library, implementing it directly removed the dependency entirely.
+
+### Board rendering
+
+#### `drawBoard()`
+Grid lines, the 9 traditional star points (4th/10th/16th intersections — decorative,
+and a genuine aid for judging distance), and coordinate labels (`A`–`T` skipping `I`,
+per Go convention; rows `1`–`19`). Composed from `drawGridLines`, `drawStarPoints`,
+and `drawCoordinateLabels`.
+
+#### `drawStones(board, lastMove)`
+Every stone: soft offset shadow, then the stone (white ones get a darker outline so
+they don't vanish against the light board), then a red ring on the most recent move.
+
+The ring radius is kept strictly under half a cell width. An earlier version used a
+larger ring that overlapped the neighbouring cell, which — combined with the
+blend-mode bug above — produced the "stones don't sit cleanly" appearance on adjacent
+moves.
+
+#### `drawHoverPreview(hoverMove, p, wouldBeLegal)`
+Faint preview stone under the cursor, tinted green when the move is legal and red when
+it isn't. Lets a beginner see an illegal move (occupied cell, double-three) *before*
+clicking, rather than discovering it from an error message afterward.
+
+#### `drawSuggestion(m)`
+Cyan target ring marking the recommended move. Drawn as a disc with the board colour
+punched back out of the middle, plus a centre dot. Deliberately unlike both the red
+last-move ring and the faint hover stone, since all three can be on screen at once.
+
+#### `drawWinLine(line)`
+Draws through the winning alignment, from the first cell to the last (the line arrives
+spatially ordered from `findWinningLine`). Several offset parallel lines approximate a
+thick stroke, since SDL draws only 1px lines natively.
+
+### Panels and overlays
+
+#### `PanelInfo` (struct)
+Bundles everything the side panel displays. Replaced a parameter list that had grown
+to six and was about to become eight; new fields can now be added without touching the
+signature.
+
+#### `drawSidePanel(info)`
+The right-hand panel: current mode, whose turn (with a "(thinking...)" suffix during a
+search), capture counts out of 10, the AI depth/timing readout — **this is what
+satisfies the subject's mandatory AI-timer display** — a plain-language "How to win"
+summary for newcomers, the keyboard controls, and any status message.
+
+#### `drawCandidateMarkers(scores)`
+Numbered markers on the cells the search actually considered, ranked best-first, top
+move highlighted. Capped at 9 because a two-digit label isn't legible inside a 32px
+cell. Showing *where* the AI looked, directly on the board, communicates the search far
+better than a list of coordinates.
+
+#### `drawDebugOverlay(scores, depth, forPlayerText)`
+The same candidates as a ranked list with their scores, plus the depth the numbers came
+from. Together with the markers, this is the "debugging process that lets you examine
+the reasoning of your AI" the subject recommends for the defense.
+
+#### `drawGameOverOverlay(winnerText)`
+Dims the board (relying on the blend mode from `init`) and centres the result banner
+plus a restart prompt. Centring is estimated from character count rather than measured
+— adequate for a banner.
 
 ---
 
-## `main.cpp`  *(Step 14, replaces the earlier console version)*
+## `ui/InputHandler`
 
-### `main()`
-The real game loop. Owns all game state (`board`, `current`, `lastMove`,
-`statusMessage`, `gameOver`, `winLine`, `aiInfo`) and a `resetGame` lambda so
-"start a new game" logic exists in exactly one place rather than being
-duplicated at every possible restart trigger.
+Files: `include/ui/InputHandler.hpp`, `src/ui/InputHandler.cpp`
 
-Per frame: polls SDL events (quit, and left-click — routed differently
-depending on whether the game has ended, whether it's the human's turn, and
-whether the click lands on a valid board cell), then renders in a fixed
-back-to-front order (board → stones → win line → side panel → game-over
-overlay), then — **after** that frame is presented, not before — runs the AI's
-turn if it's White's move. Presenting the frame first guarantees
-"(thinking...)" is actually visible on screen for at least one frame before
-the blocking `findBestMoveTimed` call runs, instead of the window silently
-freezing with no feedback.
+#### `pixelToBoardCoord(pixelX, pixelY, outMove)`
+Converts a mouse position into board coordinates — the exact inverse of `Renderer`'s
+`MARGIN`/`CELL_SIZE` placement maths, so a click always lands on the same intersection
+a stone would be drawn at.
 
-Every move, human or AI, goes through the identical engine sequence:
-`evaluateMove`/`isLegal` → `placeStone` → `checkAndApplyCaptures` →
-`checkWinConditions` → (if won) `findWinningLine` for the highlight — the same
-pipeline the original console version used, just triggered by clicks and AI
-search instead of `std::cin`.
+Rounds to the nearest intersection, then *rejects* the click if it's further from that
+intersection than `CLICK_TOLERANCE`. Without the rejection, any click vaguely near the
+board would snap to whatever line happened to be closest, which feels imprecise on a
+32px grid and makes misclicks likely. This is also what makes clicks on the side panel
+and margins harmless.
 
-Includes a safety fallback for the AI: since the search's `candidateMoves`
-doesn't enforce the double-three rule, its chosen move is verified with
-`isLegal` before being applied; on the rare chance it isn't, the game falls
-back to scanning for any legal cell rather than ever applying an invalid
-move. This is a stopgap, not a fix to the search itself — teaching the search
-to respect the rule directly remains a known follow-up, not yet done.
+A static method: a pure coordinate conversion with no state to hold.
+
+---
+
+## `main.cpp`
+
+The entry point and game loop. Holds no game rules of its own — every move, human or
+AI, goes through the same `Board` pipeline.
+
+#### `main()`
+Wrapped in a try/catch. An allocation failure raises `std::bad_alloc` rather than
+returning null, and an uncaught exception would terminate the process — which the
+subject treats as a non-functional project. This guarantees a clean exit with a
+message, not resilience: it doesn't let the program *recover* from exhaustion, it stops
+it from crashing.
+
+Per frame, in strict order:
+
+1. **Input** — quit, keyboard (`M` mode, `R` restart, `D` debug, `S` suggest), and
+   left-clicks routed by game state.
+2. **Hover** — recomputed from the live cursor position each frame.
+3. **Render** — back to front: board, stones, candidate markers, suggestion, hover,
+   win line, debug overlay, side panel, game-over overlay.
+4. **Blocking searches** — the AI's turn and any requested suggestion.
+
+**Why searches run after `present()`**: the search blocks for ~350 ms. Running it after
+the frame is on screen guarantees "(thinking...)" is actually visible before the window
+stops responding, instead of it appearing to freeze with no explanation.
+
+#### `commitMove(m, p)` (lambda)
+The single path by which a stone reaches the board: place, resolve captures, test both
+win conditions, record the winning line, pass the turn. Returns the capture count so
+the caller can word its own message.
+
+The human and AI paths each had their own copy of this sequence until they were merged.
+One implementation means one place for a rules bug to hide.
+
+#### `runSearch(p, depthOut, msOut)` (lambda)
+Runs the timed search for a player and captures the root scores for the debug view.
+Used for both the AI's turn and the suggestion feature — identical search, different
+consumer.
+
+#### `resetGame()` (lambda)
+Clears every piece of per-game state. One implementation, three triggers: `R`, a mode
+switch, and clicking after game over.
+
+#### `isHumanTurn()` (lambda)
+Single source of truth for whether a click may place a stone: true for both colours in
+hotseat, only for Black against the AI.
+
+#### AI legality fallback
+The search generates candidates without checking the double-three rule, so the AI's
+chosen move is verified with `isLegal` before being played. If it somehow fails, the
+game scans for any legal cell rather than applying an invalid move. A safety net, not a
+strategy — see Known limitations.
+
+---
+
+## Known limitations
+
+Be upfront about these at the defense. A grader will respect a clear-eyed account of
+what the implementation doesn't do far more than an overclaim they then disprove.
+
+**The search doesn't enforce the double-three rule.** `candidateMoves` returns any
+empty cell in range without consulting `evaluateMove`, so the search can in principle
+recommend a move that would be illegal for a human. `main.cpp` verifies the chosen move
+and falls back to a legal cell if needed, which prevents an illegal move ever being
+played — but the search still explores lines that couldn't legally occur. The proper
+fix is legality filtering inside candidate generation, at some cost per node.
+
+**The search is not exact minimax.** Forward pruning (top-6 candidates per node) means
+a genuinely best move ranked outside that cut is never explored. Deliberate and
+necessary; see `MAX_CANDIDATES_PER_NODE`.
+
+**Root scores below the top one are bounds, not evaluations.** An alpha-beta
+consequence, surfaced directly in the debug view. The ranking is meaningful; the
+individual losing numbers are not.
+
+**Reported depth varies with position.** Iterative deepening under a fixed time budget
+means depth is a readout, not a setting — quiet, crowded positions reach less depth
+than forcing ones where pruning cuts hard. Quote the range you actually observe in real
+games, not a single best-case number from a synthetic test board.
+
+**Out-of-memory handling is a graceful exit, not recovery.** See `main()`.
