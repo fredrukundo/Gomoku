@@ -25,8 +25,6 @@
 
 // --- Configuration ----------------------------------------------------------
 
-// Human vs AI: Black is the player, White is the engine.
-// Hotseat: both colours are played by humans, with S offering a hint.
 enum class GameMode { HumanVsAI, Hotseat };
 
 namespace {
@@ -40,7 +38,6 @@ namespace {
     // Traditional Go column labels: 'I' is skipped to avoid confusion with 1.
     const char* COLS = "ABCDEFGHJKLMNOPQRST";
 
-    // Formats a move the way the board labels it, e.g. {9,9} -> "K10".
     std::string coordText(Move m) {
         return std::string(1, COLS[m.x]) + std::to_string(m.y + 1);
     }
@@ -49,6 +46,19 @@ namespace {
         return (p == Player::Black) ? "Black" : "White";
     }
 }
+
+// Goal: a complete restorable game state. Storing a full Board copy is
+// simpler and safer than reversing a move: un-capturing stones and rewinding
+// pending-win state by hand is fiddly and easy to get subtly wrong. Board is
+// copyable, and a snapshot is only a few hundred bytes.
+struct GameSnapshot {
+    Board board;
+    Player current = Player::Black;
+    Move lastMove{-1, -1};
+    bool gameOver = false;
+    std::vector<Move> winLine;
+    std::string statusMessage;
+};
 
 int main(int argc, char* argv[]) {
     (void)argc;
@@ -63,8 +73,7 @@ int main(int argc, char* argv[]) {
 
     Renderer renderer;
     if (!renderer.init(FONT_REGULAR, FONT_BOLD)) {
-        // init() already reported the specific SDL/TTF error.
-        return 1;
+        return 1;   // init() already reported the specific SDL/TTF error
     }
 
     // --- Game state ---------------------------------------------------------
@@ -86,31 +95,58 @@ int main(int argc, char* argv[]) {
     std::string aiInfo = "No moves yet"; // depth + timing readout (required by subject)
 
     // --- Move suggestion (S) ------------------------------------------------
-    // A hint only: the recommended cell is marked, never played automatically.
 
     Move suggestedMove{-1, -1};
     bool hasSuggestion = false;
-    bool suggestionRequested = false;   // set by input, consumed after rendering
+    bool suggestionRequested = false;
 
     // --- Debug view (D) -----------------------------------------------------
-    // Copies of the search's root scores. A copy, not a reference: the next
-    // search overwrites the engine's list, but the view must keep showing the
-    // reasoning behind the move that was actually played.
 
     bool showDebug = false;
     std::vector<ScoredMove> debugScores;
     int debugDepth = 0;
     std::string debugPlayerText;
 
+    // --- History (U / Y) ----------------------------------------------------
+    // pastStates holds every position before a move was played; futureStates
+    // holds positions rewound past, so they can be replayed. Making a new move
+    // clears the future, exactly like any editor's undo stack.
+
+    std::vector<GameSnapshot> pastStates;
+    std::vector<GameSnapshot> futureStates;
+
     // --- Helpers ------------------------------------------------------------
 
-    // Single source of truth for whether a click may place a stone.
     auto isHumanTurn = [&]() {
         return mode == GameMode::Hotseat || current == humanPlayer;
     };
 
-    // Clears every piece of per-game state. Used by R, by a mode switch, and
-    // by clicking after game over.
+    // Bundles the live state into a snapshot.
+    auto captureState = [&]() {
+        GameSnapshot s;
+        s.board = board;
+        s.current = current;
+        s.lastMove = lastMove;
+        s.gameOver = gameOver;
+        s.winLine = winLine;
+        s.statusMessage = statusMessage;
+        return s;
+    };
+
+    // Puts a snapshot back. Deliberately does NOT touch the transposition
+    // table: it is keyed by position, and every search re-syncs from the board
+    // first, so rewinding can never corrupt it.
+    auto restoreState = [&](const GameSnapshot& s) {
+        board = s.board;
+        current = s.current;
+        lastMove = s.lastMove;
+        gameOver = s.gameOver;
+        winLine = s.winLine;
+        statusMessage = s.statusMessage;
+        hasSuggestion = false;
+        debugScores.clear();
+    };
+
     auto resetGame = [&]() {
         board = Board();
         current = Player::Black;
@@ -124,13 +160,18 @@ int main(int argc, char* argv[]) {
         debugScores.clear();
         debugDepth = 0;
         debugPlayerText.clear();
+        pastStates.clear();
+        futureStates.clear();
     };
 
     // The one path by which a stone reaches the board, shared by the human
-    // click handler and the AI turn: place, resolve captures, test both win
-    // conditions, then pass the turn. Returns how many stones were captured
-    // so the caller can word its own status message.
+    // click handler and the AI turn: snapshot, place, resolve captures, test
+    // both win conditions, then pass the turn. Returns how many stones were
+    // captured so the caller can word its own status message.
     auto commitMove = [&](Move m, Player p) -> int {
+        pastStates.push_back(captureState());
+        futureStates.clear();   // a new move invalidates any rewound future
+
         board.placeStone(m, p);
         lastMove = m;
         hasSuggestion = false;
@@ -150,8 +191,40 @@ int main(int argc, char* argv[]) {
         return captured;
     };
 
+    // Steps back one ply in hotseat. Against the AI it rewinds until it is the
+    // human's turn again — stopping on the AI's turn would just make it replay
+    // its move immediately, leaving the player unable to take anything back.
+    auto undoMove = [&]() {
+        if (pastStates.empty()) {
+            statusMessage = "Nothing to undo";
+            return;
+        }
+        do {
+            futureStates.push_back(captureState());
+            restoreState(pastStates.back());
+            pastStates.pop_back();
+        } while (mode == GameMode::HumanVsAI && current != humanPlayer && !pastStates.empty());
+
+        statusMessage = "Undo";
+    };
+
+    // Mirror image of undo, replaying the same number of plies.
+    auto redoMove = [&]() {
+        if (futureStates.empty()) {
+            statusMessage = "Nothing to redo";
+            return;
+        }
+        do {
+            pastStates.push_back(captureState());
+            restoreState(futureStates.back());
+            futureStates.pop_back();
+        } while (mode == GameMode::HumanVsAI && current != humanPlayer && !futureStates.empty());
+
+        statusMessage = "Redo";
+    };
+
     // Runs the search for 'p' and records what it considered for the debug
-    // view. Used for both the AI's own turn and the hint feature.
+    // view. Used for both the AI's turn and the hint feature.
     auto runSearch = [&](Player p, int& depthOut, double& msOut) -> SearchResult {
         auto t0 = std::chrono::steady_clock::now();
         SearchResult result = aiEngine.findBestMoveTimed(board, p, AI_TIME_LIMIT_MS, depthOut);
@@ -195,6 +268,13 @@ int main(int argc, char* argv[]) {
                     case SDLK_d:
                         showDebug = !showDebug;
                         break;
+                    case SDLK_u:
+                        // Works after game over too, which un-ends the game.
+                        undoMove();
+                        break;
+                    case SDLK_y:
+                        redoMove();
+                        break;
                     case SDLK_s:
                         // Deferred: the search blocks, so it runs after the
                         // frame is drawn (see section 4).
@@ -237,8 +317,6 @@ int main(int argc, char* argv[]) {
         }
 
         // --- 2. Hover preview -----------------------------------------------
-        // Recomputed from the live cursor each frame; shows where a click
-        // would land and whether it would be legal.
 
         int mouseX, mouseY;
         SDL_GetMouseState(&mouseX, &mouseY);
@@ -255,7 +333,6 @@ int main(int argc, char* argv[]) {
         }
 
         // --- 3. Render ------------------------------------------------------
-        // Drawn back to front: board, stones, markers, overlays, panel.
 
         renderer.clear();
         renderer.drawBoard();
@@ -330,10 +407,8 @@ int main(int argc, char* argv[]) {
 
             Move aiMove = result.bestMove;
 
-            // The search generates candidates without checking the
-            // double-three rule, so its choice is verified before being
-            // played. Falling back to any legal cell is a safety net, not a
-            // strategy — it should effectively never trigger.
+            // The search now filters illegal candidates, but this stays as a
+            // last line of defence: an illegal move must never reach the board.
             if (!board.isLegal(aiMove, aiPlayer)) {
                 bool found = false;
                 for (int y = 0; y < Board::SIZE && !found; y++) {
