@@ -44,18 +44,13 @@ public:
     void syncStonePositions(const Board& board);
     int evaluateHeuristic(const Board& board, Player aiPlayer) const;
 
-    // Goal: every root candidate and the score the search gave it, sorted
-    // best-first — this is the AI's actual reasoning, which findBestMove used
-    // to compute and discard. Only ever holds a FULLY COMPLETED depth's
-    // numbers; a depth cut off by the time limit is thrown away, since a
-    // partially-searched move list would show misleading scores.
     const std::vector<ScoredMove>& getRootScores() const { return lastRootScores; }
     int getLastCompletedDepth() const { return lastCompletedDepth; }
 
 private:
     int maxDepth;
 
-    static constexpr size_t MAX_CANDIDATES_PER_NODE = 6;
+    static constexpr size_t MAX_CANDIDATES_PER_NODE = 5;
     static constexpr size_t MAX_CANDIDATES_AT_ROOT = 12;
 
     int minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta);
@@ -85,6 +80,20 @@ private:
     int quickLocalScore(const Board& board, Move m, Player mover) const;
     int localRunScore(const Board& board, Move m, Player p) const;
 
+    // Goal: cheap pre-filter so the expensive legality check runs rarely. A
+    // double-three needs the move to create TWO free-threes, and each free-three
+    // needs at least two friendly stones near the move. Fewer than four friendly
+    // stones within radius 3 makes a double-three impossible, so the full check
+    // can be skipped outright. Radius 3 because the widest free-three shape
+    // (.XX.X.) can place a contributing stone three steps from the new one.
+    bool couldBeDoubleThree(const Board& board, Move m, Player p) const;
+
+    // Goal: removes moves that would be illegal under the double-three rule.
+    // Without this the search explores positions that could never legally
+    // occur — it can credit itself an unstoppable threat built on a move it is
+    // forbidden to play, which distorts every score above that line.
+    void filterIllegalMoves(Board& board, std::vector<Move>& moves, Player p);
+
     std::chrono::steady_clock::time_point deadline;
     bool aborted = false;
     int nodesSinceCheck = 0;
@@ -101,8 +110,6 @@ private:
     long long ttMisses = 0;
     long long ttStores = 0;
 
-    // currentRootScores is filled as findBestMove runs; it's only promoted to
-    // lastRootScores once a depth finishes without being aborted.
     std::vector<ScoredMove> currentRootScores;
     std::vector<ScoredMove> lastRootScores;
     int lastCompletedDepth = 0;
