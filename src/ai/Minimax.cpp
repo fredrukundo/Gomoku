@@ -293,6 +293,46 @@ bool Minimax::checkTimeUp() {
     return aborted;
 }
 
+bool Minimax::couldBeDoubleThree(const Board& board, Move m, Player p) const {
+    Cell mine = (p == Player::Black) ? Cell::Black : Cell::White;
+    static const int dirs[4][2] = { {1,0}, {0,1}, {1,1}, {1,-1} };
+
+    // A free-three through m must lie along ONE axis, and needs at least two
+    // other friendly stones on that axis within 3 steps (3 is the reach of the
+    // widest shape, .XX.X.). A double-three needs two such axes. Checking per
+    // axis is both tighter and cheaper than counting friendly stones anywhere
+    // in a surrounding box: 24 lookups worst case with early exit, versus 48,
+    // and far fewer candidates pass through to the expensive isLegal check.
+    int axesWithPotential = 0;
+
+    for (const auto& d : dirs) {
+        int dx = d[0], dy = d[1];
+        int friendly = 0;
+
+        for (int step = 1; step <= 3; step++) {
+            if (board.get(m.x + dx * step, m.y + dy * step) == mine) friendly++;
+            if (board.get(m.x - dx * step, m.y - dy * step) == mine) friendly++;
+        }
+
+        if (friendly >= 2) {
+            axesWithPotential++;
+            if (axesWithPotential >= 2)
+                return true;
+        }
+    }
+    return false;
+}
+
+void Minimax::filterIllegalMoves(Board& board, std::vector<Move>& moves, Player p) {
+    size_t write = 0;
+    for (size_t i = 0; i < moves.size(); i++) {
+        if (couldBeDoubleThree(board, moves[i], p) && !board.isLegal(moves[i], p))
+            continue;                 // drop it
+        moves[write++] = moves[i];    // keep it, compacting in place
+    }
+    moves.resize(write);
+}
+
 int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta) {
     if (checkTimeUp())
         return 0;
@@ -333,6 +373,7 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
 
     auto moves = candidateMoves(board);
     orderMovesByQuickScore(board, moves, current);
+    filterIllegalMoves(board, moves, current);
 
     if (ttIt != transpositionTable.end()) {
         Move ttMove = ttIt->second.bestMove;
@@ -346,6 +387,11 @@ int Minimax::minimax(Board& board, int depth, bool maximizing, Player aiPlayer, 
 
     if (moves.size() > MAX_CANDIDATES_PER_NODE)
         moves.resize(MAX_CANDIDATES_PER_NODE);
+
+    // Every candidate was illegal — nothing to search, so score the position
+    // as it stands rather than returning a meaningless sentinel.
+    if (moves.empty())
+        return evaluateHeuristic(board, aiPlayer);
 
     if (checkTimeUp())
         return 0;
@@ -407,6 +453,7 @@ SearchResult Minimax::findBestMove(Board& board, Player aiPlayer, const Move* pr
 
     auto moves = candidateMoves(board);
     orderMovesByQuickScore(board, moves, aiPlayer);
+    filterIllegalMoves(board, moves, aiPlayer);
     if (moves.size() > MAX_CANDIDATES_AT_ROOT)
         moves.resize(MAX_CANDIDATES_AT_ROOT);
     if (preferredFirst) {
