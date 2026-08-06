@@ -347,6 +347,8 @@ void Renderer::drawSidePanel(const PanelInfo& info) {
     y += 18;
     drawText("D - AI reasoning", panelX + 20, y, dark, bodyFont);
     y += 18;
+    drawText("U / Y - undo / redo", panelX + 20, y, dark, bodyFont);
+    y += 18;
     drawText("R - restart", panelX + 20, y, dark, bodyFont);
     y += 24;
 
