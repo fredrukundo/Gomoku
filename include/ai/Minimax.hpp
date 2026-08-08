@@ -30,9 +30,21 @@ struct MoveUndo {
 class Minimax {
 public:
     explicit Minimax(int maxDepth);
+    
+    /*
+        ****** Search entry point ******
+    */
 
-    SearchResult findBestMove(Board& board, Player aiPlayer, const Move* preferredFirst = nullptr);
+
+    // Goal: find the best move for aiPlayer on the given board, 
+    // within the time limit (in milliseconds), it Runs findBestMove at depth 1, d2, d3, ...
+    // Returns a SearchResult containing the best move found and its score.
     SearchResult findBestMoveTimed(Board& board, Player aiPlayer, double timeLimitMs, int& depthReached);
+
+    // Goal: one fixed-depth search from the root, with no time limit. generates candidate moves, evaluates them, and returns the best one.
+    // Returns a SearchResult containing the best move found and its score.
+    SearchResult findBestMove(Board& board, Player aiPlayer, const Move* preferredFirst = nullptr);
+    
     bool checkTimeUp();
 
     long long getTTHits() const { return ttHits; }
@@ -53,16 +65,34 @@ private:
     static constexpr size_t MAX_CANDIDATES_PER_NODE = 5;
     static constexpr size_t MAX_CANDIDATES_AT_ROOT = 12;
 
+    // Goal: recursive minimax search with alpha-beta pruning.
+    // ( maximizing is true if it's the AI's turn so it takes the highest score, false if it's the opponent's turn so it takes the lowest score)
+    // Returns the score of the best move found.
     int minimax(Board& board, int depth, bool maximizing, Player aiPlayer, int alpha, int beta);
 
     int evaluateStub(Board& board, Player aiPlayer) const;
     int patternWeight(int length, bool openStart, bool openEnd) const;
     int scorePlayerPatterns(const Board& board, Player p) const;
 
+    /*
+        stonePositions + posIndex[] is a cache of all the stones on the board, in order of placement.
+        This is used to generate candidate moves quickly, and to undo moves quickly.
+    */
     std::vector<Move> stonePositions;
     int posIndex[Board::SIZE * Board::SIZE];
+
+    /*
+        addStons and removeStones update the stonePositions cache and 
+        the posIndex[] lookup table.
+        always called via applyMove() and undoMove() to keep the cache in sync with the board.
+    */
     void addStone(Move m);
     void removeStone(Move m);
+
+    /*
+        applyMove and undoMove update the board, the stonePositions cache, the posIndex[] lookup table,
+        and the undoStack. They also update the currentHash for Zobrist hashing.
+    */
 
     void applyMove(Board& board, Move m, Cell c);
     void undoMove(Board& board, Move m);
