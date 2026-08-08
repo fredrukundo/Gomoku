@@ -128,6 +128,10 @@ private:
     // line has a defender stone on one flank and an empty cell on the other.
     bool isLineVulnerable(const std::vector<Move>& line, Player attacker) const;
 
+    // Goal: checks if the last move created a 5-alignment that is vulnerable to capture.
+    // If so, sets hasPendingWin to true and stores the line and 
+    // player in pendingWinLine and pendingWinPlayer. If not, sets hasPendingWin to false.
+    
     bool hasPendingWin = false;
     Player pendingWinPlayer = Player::Black;
     std::vector<Move> pendingWinLine;
